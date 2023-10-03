@@ -3,7 +3,7 @@ import file_handling
 from PIL import Image, ImageDraw
 import matplotlib.pyplot as plt
 
-scale = 20.
+scale = 40.
 
 def map_to_drawing(input_val):
     return scale*input_val+640
