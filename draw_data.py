@@ -1,5 +1,6 @@
 import os
 import file_handling
+import numpy as np
 from PIL import Image, ImageDraw
 import matplotlib.pyplot as plt
 
@@ -42,22 +43,34 @@ def draw_disease(draw, data, circle_radius):
         circle_bound = [x_draw - circle_radius, y_draw - circle_radius, x_draw + circle_radius, y_draw + circle_radius]
         draw.ellipse(circle_bound, (color, color, color))  # (int(groupC[0] * 255), int(groupC[1] * 255), int(groupC[2] * 255)))
 
-def draw_data(circle_radius_input, input_dir, number_of_time_steps, time_step_skip):
-    output_dir = 'images'
-    if not os.path.isdir(output_dir):
-        os.mkdir(output_dir)
+def draw_single_image(frame_count, output_dir, circle_radius, data):
+    image_name = str(frame_count).zfill(4) + ".png"
+    image1 = Image.new("RGB", (1280, 1280), (255, 255, 255))
+    draw1 = ImageDraw.Draw(image1)
+    draw_crowd(draw1, data, circle_radius)
+    #draw_disease(draw1, data, circle_radius)
+    image1.save(os.path.join(output_dir, image_name))
 
+def draw_data(input_dir, output_dir, circle_radius_input, number_of_time_steps, time_steps_per_frame):
     circle_radius = scale * circle_radius_input
-
     frame_count = 0
-    for i in range(0, number_of_time_steps, time_step_skip):
-        full_file = os.path.join(input_dir, str(i)+".csv")
-        image_name = str(frame_count).zfill(4) + ".png"
-        image1 = Image.new("RGB", (1280, 1280), (255, 255, 255))
-        draw1 = ImageDraw.Draw(image1)
-        data = file_handling.read_numerical_csv_file(full_file)
-        #draw_crowd(draw1, data, circle_radius)
-        draw_disease(draw1, data, circle_radius)
-        image1.save(os.path.join(output_dir, image_name))
-        frame_count += 1
 
+    total_number_of_frames = int(number_of_time_steps / time_steps_per_frame)
+    #print("total_number_of_frames",total_number_of_frames)
+
+    #interpolate time steps
+    data = []
+    for i in range(0, number_of_time_steps+1):
+        file_name = os.path.join(input_dir, str(i) + ".csv")
+        data_time_step_i = file_handling.read_numerical_csv_file(file_name)
+        data.append(data_time_step_i)
+    #print(len(data))
+    for i in np.linspace(0, number_of_time_steps, total_number_of_frames, endpoint=False):
+        start_time_step = int(i)
+        end_time_step = int(i+1)
+        #print(i,start_time_step, end_time_step)
+
+        data_to_use = (end_time_step-i)*data[start_time_step] + (i-start_time_step)*data[end_time_step]
+        draw_single_image(frame_count, output_dir, circle_radius, data_to_use)
+        frame_count += 1
+    #draw_single_image(frame_count, output_dir, circle_radius, data[len(data)-1])

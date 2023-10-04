@@ -7,10 +7,20 @@ import random
 import subprocess
 import time
 
-agent_radius = 0.35
-interaction_radius = 2.
+agent_radius = 0.5
+interaction_radius = 10.
 social_force_strength = 1.
-dt = 1./24.
+dt = 1./2.4#1./24.#
+frame_rate = 24.
+is_implicit = True
+scenario_name = "implicit_crowds_8_agents"#"2_agents"#
+
+ttc_smoothing_eps = 0.2
+ttc_constant = 1.5
+ttc_power = 3.25
+goal_velocity_coefficient = 2.
+ttc_0 = 3
+
 
 time_amount = 30.
 
@@ -42,13 +52,13 @@ class Person:
 
 
 #TODO: add symptomaticity interactions
-def pairwise_interactions(p1, p2):
+def explicit_solve_pairwise_interactions(p1, p2):
     '''Get social force between two agents'''
     relative_displacement = p2.position - p1.position
     distance = np.linalg.norm(relative_displacement)
     if distance > interaction_radius:
         return np.array([0.,0.])
-    relative_displacement_vector = relative_displacement / distance
+    relative_displacement_vector = relative_displacement / (distance - 2.* agent_radius)
 
     #relative_velocity = p2.v - p1.v
     #relative_speed = np.linalg.norm(relative_velocity)
@@ -65,19 +75,73 @@ def get_and_apply_forces(agents):
     desired_velocity_forces = np.zeros((num_agents, 2))
     for i in np.arange(num_agents):
         agents[i].get_desired_velocity()
-        desired_velocity_forces[i] = agents[i].desired_velocity - agents[i].velocity
+        desired_velocity_forces[i] = goal_velocity_coefficient * (agents[i].desired_velocity - agents[i].velocity)
 
     #social force
     social_forces = np.zeros((num_agents, 2))
     for i in np.arange(num_agents):
         for j in np.arange(i+1,num_agents):
-            social_force_i, social_force_j = pairwise_interactions(agents[i], agents[j])
+            social_force_i, social_force_j = explicit_solve_pairwise_interactions(agents[i], agents[j])
             social_forces[i] += social_force_i
             social_forces[j] += social_force_j
 
     for i in np.arange(num_agents):
         agents[i].velocity += (desired_velocity_forces[i] + social_forces[i]) * dt
 
+
+def ttci_energy(relative_positions, relative_velocities, combined_radius):
+    '''inverse time to contact'''
+
+    relative_positions_magn = np.linalg.norm(relative_positions)
+    relative_positions_dir = relative_positions / relative_positions_magn
+    relative_velocities_projected = np.dot(-relative_velocities, relative_positions_dir)
+    relative_velocities_tangential = relative_velocities - relative_velocities_projected * relative_positions_dir
+    relative_velocities_tangential_magn = np.linalg.norm(relative_velocities_tangential)
+
+    r_sq = combined_radius*combined_radius
+    denominator = relative_positions_magn*relative_positions_magn - r_sq
+
+    v_t_max = combined_radius * relative_velocities_projected / np.sqrt(denominator)
+    cutoff = np.sqrt(1.-ttc_smoothing_eps*ttc_smoothing_eps)
+    v_t_star = cutoff*v_t_max
+
+    if relative_velocities_tangential_magn < v_t_star:
+        #compute inverse time to contact as usual
+        vt_sq = relative_velocities_tangential_magn * relative_velocities_tangential_magn
+        discriminant = np.sqrt(r_sq * relative_velocities_projected * relative_velocities_projected - denominator * denominator * vt_sq)
+        numerator = relative_velocities_projected * relative_positions_magn + discriminant
+        ttci = numerator / denominator
+        if ttci > 0.:
+            exp_val = 1. / (ttci * ttc_0)
+            energy_mult = ttc_constant * np.power(ttci, ttc_power-1) * np.exp(-1*exp_val)
+            energy = energy_mult * ttci
+
+            a = -relative_positions + relative_velocities*dt - relative_velocities_projected*dt*relative_positions_dir
+            b = ((dt*relative_velocities_projected + relative_positions_magn)*relative_velocities_tangential * denominator / relative_positions_magn +
+                -relative_positions*dt*vt_sq + r_sq * relative_velocities_projected*a / relative_positions_dir) / discriminant + dt*relative_velocities_projected
+            gradient = -energy_mult / denominator * ((a+b)*(ttc_power+exp_val) - 2.*dt*(1./ttc_0 + ttc_power*ttci)*relative_positions)
+
+            return energy, gradient
+        return None
+    else:
+        sqrt_denominator = np.sqrt(denominator)
+        ttci = (relative_positions_magn + ttc_smoothing_eps*combined_radius)*relative_velocities_projected / denominator - \
+               cutoff  / ttc_smoothing_eps * (relative_velocities_tangential_magn - v_t_star) / sqrt_denominator
+        if ttci > 0.:
+            exp_val = 1. / (ttci * ttc_0)
+            energy_mult = ttc_constant * np.power(ttci, ttc_power-1) * np.exp(-1*exp_val)
+            energy = energy_mult * ttci
+
+            a = (-relative_positions + relative_velocities*dt - relative_velocities_projected*dt*relative_positions_dir) / relative_positions_magn
+            b = ((ttc_smoothing_eps*combined_radius + relative_positions_magn)*a) / denominator + \
+                (cutoff*((relative_velocities_tangential*dt*relative_velocities_projected / relative_positions_magn + relative_velocities_tangential) /
+                         relative_velocities_tangential_magn + combined_radius*cutoff / sqrt_denominator*(a - dt*relative_velocities_projected*relative_positions / denominator))) / \
+                (ttc_smoothing_eps*sqrt_denominator) - dt*relative_positions / denominator* \
+                (relative_velocities_projected*(ttc_smoothing_eps*combined_radius + relative_positions_magn) / denominator - relative_velocities_projected / relative_positions_magn + ttci)
+            gradient = energy_mult * np.power(ttci, ttc_power-1)*(ttc_power+exp_val) * b
+
+            return energy, gradient
+        return None
 
 def potential_energy_value_and_gradient(velocity_vector, agents):
     '''sum of momentum potential, desired velocity potential, social force potential'''
@@ -91,24 +155,28 @@ def potential_energy_value_and_gradient(velocity_vector, agents):
         velocity = velocity_vector[2*i:2*i+2]
         velocity_diff = velocity - agents[i].velocity
         goal_velocity_diff = velocity - agents[i].desired_velocity
-        value += 0.5 * dt * np.dot(velocity_diff,velocity_diff) + 0.5 * dt * np.dot(goal_velocity_diff,goal_velocity_diff)
-        gradient[2*i:2*i+2] += dt * (velocity_diff + goal_velocity_diff)
+        value += 0.5 * dt * np.dot(velocity_diff,velocity_diff) + 0.5 * dt * goal_velocity_coefficient * np.dot(goal_velocity_diff,goal_velocity_diff)
+        gradient[2*i:2*i+2] += dt * (velocity_diff + goal_velocity_coefficient * goal_velocity_diff)
 
-    #add social force potential
+    #add social force and time to contact potential
     social_force_gradient = np.zeros(velocity_vector.shape)
+    ttci_gradient = np.zeros(velocity_vector.shape)
     for i in np.arange(num_agents):
         velocity_i = velocity_vector[2*i:2*i+2]
+        position_i_new = agents[i].position + velocity_i * dt
         for j in np.arange(i+1, num_agents):
             #check to make sure the agents are within each others' range. TODO: consider replacing with more efficient code, like the locality query used in the Implicit Crowds code.
             if np.linalg.norm(agents[i].position - agents[j].position) < interaction_radius:
                 #print(f"here {i} {j}")
                 velocity_j = velocity_vector[2*j:2*j+2]
+                position_j_new = agents[j].position + velocity_j*dt
 
                 #use distance after a time step
-                displacement_after = agents[j].position + velocity_j*dt - (agents[i].position + velocity_i*dt)
+                displacement_after = position_j_new - position_i_new
                 dist_after = np.linalg.norm(displacement_after)
-                value += social_force_strength / dist_after
-                local_gradient = -1*social_force_strength * displacement_after * dt / np.power(dist_after, 3)
+                modified_dist_after = dist_after - 2.*agent_radius
+                value += social_force_strength / modified_dist_after
+                local_gradient = -1*social_force_strength * displacement_after * dt / (modified_dist_after * modified_dist_after * dist_after)
                 social_force_gradient[2 * i:2 * i + 2] -= local_gradient
                 social_force_gradient[2 * j:2 * j + 2] += local_gradient
 
@@ -173,11 +241,23 @@ def potential_energy_value_and_gradient(velocity_vector, agents):
                 social_force_gradient[2*i:2*i+2] -= distance_derivative
                 social_force_gradient[2*j:2*j+2] += distance_derivative
                 print("social_force_gradient", social_force_gradient)'''
+
+                #time to contact potential
+                relative_positions = position_j_new - position_i_new
+                relative_velocities = velocity_j - velocity_i
+                ttci_energy_result = ttci_energy(relative_positions, relative_velocities, 2.*agent_radius)
+                if ttci_energy_result is not None:
+                    ttci_energy_value, ttci_energy_gradient = ttci_energy_result
+                    value += ttci_energy_value
+                    ttci_gradient[2 * i:2 * i + 2] -= ttci_energy_gradient
+                    ttci_gradient[2 * j:2 * j + 2] += ttci_energy_gradient
+
     #print(np.linalg.norm(gradient))
     #print(social_force_gradient)
     #print()
 
     gradient += social_force_gradient
+    gradient += ttci_gradient
     return value, gradient
 
 
@@ -262,14 +342,14 @@ def generate_scenario(total_pop, scenario_number, folder, extra_info=""):
             position = generate_point(x_range, y_range)
             bad_pos = False
             for agent in agents:
-                if np.linalg.norm(position - agent.position) < 1.2*agent_radius:
+                if np.linalg.norm(position - agent.position) < 2.2*agent_radius:
                     bad_pos = True
                     break
         while bad_dest:
             destination = generate_point(x_range, y_range)
             bad_dest = False
             for agent in agents:
-                if np.linalg.norm(destination - agent.destination) < 1.2*agent_radius:
+                if np.linalg.norm(destination - agent.destination) < 2.2*agent_radius:
                     bad_dest = True
                     break
 
@@ -282,8 +362,8 @@ def generate_scenario(total_pop, scenario_number, folder, extra_info=""):
     save_crowd_data(scenario_number, agents, folder, extra_info)
 
 #TODO: all changes to generate_scenario also need to be done here
-def open_scenario(scenario_number, folder, extra_info=""):
-    data = file_handling.read_numerical_csv_file(os.path.join(folder, extra_info+str(scenario_number)+".csv"))
+def open_scenario(folder,scenario_name):
+    data = file_handling.read_numerical_csv_file(os.path.join(folder, scenario_name+".csv"))
 
     agents = []
     for i in np.arange(len(data)):
@@ -303,18 +383,30 @@ def open_scenario(scenario_number, folder, extra_info=""):
 
 sim_start = time.perf_counter_ns()
 
-agents = open_scenario(0, "scenarios")
+#make folder with scenario name
+if is_implicit:
+    scenario_folder = "implicit_solve_"+scenario_name
+else:
+    scenario_folder = "explicit_solve_"+scenario_name
+scenario_folder += "_dt="+"%.5f"%(dt)
+if not os.path.isdir((scenario_folder)):
+    os.mkdir(scenario_folder)
+
+#open the scenario
+agents = open_scenario("scenarios",scenario_name)
 pop_num = len(agents)
 number_of_time_steps = int(np.ceil(time_amount / dt))
 
-time_steps_dir = "time_steps"
+time_steps_dir = os.path.join(scenario_folder,"time_steps")
 if not os.path.isdir(time_steps_dir):
     os.mkdir(time_steps_dir)
 
 for i in np.arange(number_of_time_steps):
     save_crowd_data(i, agents, time_steps_dir)
-    #get_and_apply_forces(agents) #explicit solve for agent velocities
-    velocities_implicit_solve(agents) #implicit solve for agent velocities
+    if is_implicit:
+        velocities_implicit_solve(agents) #implicit solve for agent velocities
+    else:
+        get_and_apply_forces(agents) #explicit solve for agent velocities
     for j in np.arange(pop_num):
         agents[j].update_position()
 save_crowd_data(number_of_time_steps, agents, time_steps_dir)
@@ -325,13 +417,17 @@ print('Time to run simulations:', time_to_run_sims, 's\t\t(', time_to_run_sims/3
 print("Finished simulation. Moving to drawing.")
 
 draw_start = time.perf_counter_ns()
-time_steps_per_frame = 1
-#TODO: interpolation for smooth animation when time_steps_per_frame < 1.
-draw_data.draw_data(agent_radius, time_steps_dir, number_of_time_steps, time_steps_per_frame)
+time_steps_per_frame = 1./(dt*frame_rate)
+images_dir = os.path.join(scenario_folder,"images")
+if not os.path.isdir(images_dir):
+    os.mkdir(images_dir)
+#TODO: simulate up to frame instead of interpolating?
+draw_data.draw_data(time_steps_dir, images_dir, agent_radius, number_of_time_steps, time_steps_per_frame)
 draw_end = time.perf_counter_ns()
 time_to_run_draw = (draw_end - draw_start) / 1e9
 print('Time to draw:', time_to_run_draw, 's\t\t(', time_to_run_draw/3600., 'h)')
 print("Finished drawing. Making a video.")
+
 
 
 #make the video
@@ -340,6 +436,6 @@ def do_thing(command_str):
     process.wait()
     print("Done")
 frame_rate = 1/(dt * time_steps_per_frame)
-command_str = f"ffmpeg -framerate {frame_rate} -i images/%04d.png -c:v libx264 -profile:v high -crf 20 -pix_fmt yuv420p output.mp4"
+command_str = f"ffmpeg -framerate {frame_rate} -i {scenario_folder}/images/%04d.png -c:v libx264 -profile:v high -crf 20 -pix_fmt yuv420p {scenario_folder}/{scenario_folder}.mp4"
 do_thing(command_str)
 

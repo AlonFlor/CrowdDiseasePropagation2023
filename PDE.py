@@ -287,7 +287,7 @@ class grid:
                     vel_y_on_x_1 = self.interpolate_velocity(cell_center+x_shift,1)
                     cell.curl = ((vel_y_on_x_1 - vel_y_on_x_0) - (vel_x_on_y_1 - vel_x_on_y_0)) / (0.5*width)'''
 
-    def find_and_apply_pressures(self):
+    '''def find_and_apply_pressures(self):
         #assign a row to each non-solid cell
         pressure_solve_cell_list = []
         for cell_list in self.cell_table.values():
@@ -357,10 +357,10 @@ class grid:
         #TODO: don't use the pressures directly. First need to find gradient of pressures using eq. 4 from the document.
         for i in np.arange(len(pressure_solve_cell_list)):
             cell = pressure_solve_cell_list[i]
-            cell.velocity -= dt/width * pressures[i]
+            cell.velocity -= dt/width * pressures[i]'''
 
 
-    def update_disease_densities(self):
+    '''def update_disease_densities(self):
         #TODO: not in solids
         #advect
         for cell_list in self.cell_table.values():
@@ -383,8 +383,18 @@ class grid:
                 cell.disease_density = max(0., cell.disease_density - disease_die_off_rate * dt) #TODO replace with implicit solve
 
 
-        self.get_cell(0,0).disease_density=0.25 #for temporary source cell  #TODO please delete once no longer necessary, and replace with a different mechanism for sources.
+        self.get_cell(0,0).disease_density=0.25 #for temporary source cell  #TODO please delete once no longer necessary, and replace with a different mechanism for sources.'''
 
+    def diffuse_disease(self):
+        '''What equation should I use for disease diffusion?????
+
+        Use heat equation. Find the Laplacian at each cell, that is the force.
+        Problem: Implicit mean I need the force in the next time step.
+
+        u_new = u +dt * f(t_new, u_new)
+
+        '''
+        pass
 
     def save_disease_data(self, number, folder, extra_info=""):
         num_diseased_air_cells = 0
@@ -403,7 +413,6 @@ class grid:
                     cell_index += 1
         header = "pos_x,pos_y,disease_density"
         file_handling.write_csv_file(os.path.join(folder, extra_info+str(number)+".csv"), header, data)
-
 
 
 
