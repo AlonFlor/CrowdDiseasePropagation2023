@@ -1,0 +1,14 @@
+set(ENABLE_DISEASE_SPREAD OFF CACHE BOOL "Enable disease spread project.")
+
+cmake_policy(SET CMP0054 NEW)
+
+#if(ENABLE_DISEASE_SPREAD)
+    #add_subdirectory(poisson_solver)
+    #add_subdirectory(plugin_Autonomous_Navigation)
+    #add_subdirectory(plugin_Heightfield)
+    #add_subdirectory(rigid_fluid_coupling_2d)
+    #add_subdirectory(rigid_fluid_coupling_3d)
+    #add_subdirectory(smoke_2d)
+    #add_subdirectory(smoke_3d)
+    #add_subdirectory(viscosity_solver)
+#endif()
