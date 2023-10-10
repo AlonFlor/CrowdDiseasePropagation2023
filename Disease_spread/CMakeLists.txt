@@ -1,5 +1,7 @@
 add_executable(empty
   main.cpp
+  Disease_Spread_Driver.cpp
+  Disease_Spread_Example.cpp
   )
 
 find_package(OpenMP)
@@ -8,13 +10,13 @@ if (OPENMP_FOUND)
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 endif()
 
-#target_link_libraries(poisson_solver
-#  PRIVATE
-#  nova::dynamics
-#  nova::tools
-#  nova::geometry
-#  nova::spgrid
-#  )
+target_link_libraries(empty
+  PRIVATE
+  nova::dynamics
+  nova::tools
+  nova::geometry
+  nova::spgrid
+  )
 
 file( RELATIVE_PATH REL ${PROJECT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR} )
 
