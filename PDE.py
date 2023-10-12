@@ -287,7 +287,7 @@ class grid:
                     vel_y_on_x_1 = self.interpolate_velocity(cell_center+x_shift,1)
                     cell.curl = ((vel_y_on_x_1 - vel_y_on_x_0) - (vel_x_on_y_1 - vel_x_on_y_0)) / (0.5*width)'''
 
-    '''def find_and_apply_pressures(self):
+    def find_and_apply_pressures(self):
         #assign a row to each non-solid cell
         pressure_solve_cell_list = []
         for cell_list in self.cell_table.values():
@@ -313,8 +313,10 @@ class grid:
                 if neighbors[j] is not None:
                     if neighbors[j].type!=2:
                         num_non_solid_neighbors += 1
-                        neighbor_place_in_pressure_matrix = neighbors[j].place_in_pressure_matrix
-                        A[i][neighbor_place_in_pressure_matrix] = 1     #set this neighbor's place in the current row to 1
+                        if neighbors[j].type==1:
+                            neighbor_place_in_pressure_matrix = neighbors[j].place_in_pressure_matrix
+                            A[i][neighbor_place_in_pressure_matrix] = 1     #set this neighbor's place in the current row to 1
+                            #TODO this is non-symmetric, but making it symmetric makes it singular.
                         if j==1:
                             neighbor_iu_exists_and_is_non_solid=True
                         elif j==3:
@@ -339,8 +341,19 @@ class grid:
             #b[i] = width/dt * divergence    #set the cell's place in the vector b
 
         #solve the matrix equation
-        print("A\n",A)
+        print("A")
+        for i in np.arange(A.shape[0]):
+            for j in np.arange(A.shape[1]):
+                print(A[i][j], end="")
+                if j < A.shape[1]-1:
+                    print(", ", end="")
+            print()
         print("b\n",b)
+        #A_inv = np.linalg.inv(A)
+        #print("A_inv\n",A_inv)
+        #result = np.matmul(A_inv,b)
+        #print("result\n",result)
+        #print("det(A)",np.linalg.det(A))
         A = csr_matrix(A)
         result = cg(A, b)
         pressures = result[0]
@@ -357,7 +370,7 @@ class grid:
         #TODO: don't use the pressures directly. First need to find gradient of pressures using eq. 4 from the document.
         for i in np.arange(len(pressure_solve_cell_list)):
             cell = pressure_solve_cell_list[i]
-            cell.velocity -= dt/width * pressures[i]'''
+            cell.velocity -= dt/width * pressures[i]
 
 
     '''def update_disease_densities(self):
