@@ -4,7 +4,6 @@ import draw_data
 import file_handling
 from scipy import optimize
 import random
-import subprocess
 import time
 
 agent_radius = 0.5
@@ -429,13 +428,10 @@ print('Time to draw:', time_to_run_draw, 's\t\t(', time_to_run_draw/3600., 'h)')
 print("Finished drawing. Making a video.")
 
 
-
 #make the video
-def do_thing(command_str):
-    process = subprocess.Popen(command_str, shell=True, stdout=subprocess.PIPE)
-    process.wait()
-    print("Done")
 frame_rate = 1/(dt * time_steps_per_frame)
-command_str = f"ffmpeg -framerate {frame_rate} -i {scenario_folder}/images/%04d.png -c:v libx264 -profile:v high -crf 20 -pix_fmt yuv420p {scenario_folder}/{scenario_folder}.mp4"
-do_thing(command_str)
+
+draw_data.make_video(frame_rate, scenario_folder, scenario_folder)
+print("Done")
+
 
