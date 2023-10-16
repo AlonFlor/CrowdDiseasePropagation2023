@@ -18,17 +18,23 @@ Air will be simulated as stated in the document, in the form of wind and pressur
 '''
 
 width = 0.1
-density_threshold = 0.01
+density_threshold = 0.003
 number_of_buffer_layers = 3
-atmospheric_pressure = 1
+#atmospheric_pressure = 1
 
-baseline_velocity = np.array([1.,-1.])#np.array([3.,-1.])#np.array([3.,0.])# #TODO replace with airflow
-disease_diffusivity_constant = 0.7#0.3
+baseline_velocity = np.array([3.,-1.])#np.array([1.,-1.])#np.array([3.,0.])# #TODO replace with airflow
+disease_diffusivity_constant = 0.07
 
 #TODO: coordinate these with main simulation
 dt = 0.01
+number_of_time_steps = 300#1000
 #vorticity_confinement_force_strength = 1.
 disease_die_off_rate = 0.
+grid_shape = (256,256)
+src_x,src_y = -127,0 #temp coords of source TODO: delete when replacing with better sources
+
+
+
 
 class grid_cell:
     def __init__(self, i, j):
@@ -52,8 +58,8 @@ class grid_cell:
         self.temp_velocity = np.array([0., 0.]) #for updating the velocity
         self.temp_disease_concentration = np.array([0., 0.]) #for updating the disease density
         #self.curl = np.array([0., 0.]) #for calculating the vorticity confinement force
-        self.place_in_disease_matrix = 0
-        self.place_in_pressure_matrix = 0
+        self.place_in_disease_matrix = None
+        self.place_in_pressure_matrix = None
 
         #pointers to neighboring cells. b=below, a=above
         self.neighbor_id = None
@@ -68,17 +74,70 @@ def hash_grid_coords(i, j):
     return 541*i + 79*j
 
 class grid:
-    def __init__(self):
+    def __init__(self, grid_shape):
         #TODO need to initiate cell_table with cells for sources. Sinks are gas cells right outside the bounds of the simulation.
         #   To be clear, a source cell is a regular cell except for the fact that it is close to a contagious person, and is needed (ie do not delete) to track that person's disease output
         #       Perhaps we can have an external force at the source location, to push the disease out of the person's mouth.
         #TODO For now, since I just want somthing out, I will set a source at the origin.
         self.cell_table = dict()
-        self.add_cell(0, 0)
-        self.get_cell(0,0).disease_concentration=0.25
-        self.get_cell(0,0).type=1
-        self.get_cell(0,0).bound_type=1 #does nothing so far
-        self.get_cell(0,0).velocity = baseline_velocity
+        size_side1, size_side2 = grid_shape
+        half_way1 = size_side1/2
+        half_way2 = size_side2/2
+        for i_raw in np.arange(size_side1):
+            i = i_raw-half_way1
+            for j_raw in np.arange(size_side2):
+                j = j_raw-half_way2
+                cell = grid_cell(i,j)
+                cell.velocity = baseline_velocity #initialize uniform velocities for all cells. TODO: allow alternate velocity field initilization options.
+                hash_val = hash_grid_coords(i, j)
+                if hash_val in self.cell_table:
+                    self.cell_table[hash_val].append(cell)
+                else:
+                    self.cell_table[hash_val] = [cell]
+
+                # configure the new cell's neighbors:
+                # neighbor in the -x direction
+                neighbor_id = self.get_cell(i - 1, j)
+                if neighbor_id is not None:
+                    cell.neighbor_id = neighbor_id
+                    neighbor_id.neighbor_iu = cell
+                # neighbor in the +x direction
+                neighbor_iu = self.get_cell(i + 1, j)
+                if neighbor_iu is not None:
+                    cell.neighbor_iu = neighbor_iu
+                    neighbor_iu.neighbor_id = cell
+                # neighbor in the -y direction
+                neighbor_jd = self.get_cell(i, j - 1)
+                if neighbor_jd is not None:
+                    cell.neighbor_jd = neighbor_jd
+                    neighbor_jd.neighbor_ju = cell
+                # neighbor in the +y direction
+                neighbor_ju = self.get_cell(i, j + 1)
+                if neighbor_ju is not None:
+                    cell.neighbor_ju = neighbor_ju
+                    neighbor_ju.neighbor_jd = cell
+                # neighbor in the -x and -y direction
+                neighbor_ijd = self.get_cell(i - 1, j - 1)
+                if neighbor_ijd is not None:
+                    cell.neighbor_ijd = neighbor_ijd
+                    neighbor_ijd.neighbor_iju = cell
+                # neighbor in the +x and +y direction
+                neighbor_iju = self.get_cell(i + 1, j + 1)
+                if neighbor_iju is not None:
+                    cell.neighbor_iju = neighbor_iju
+                    neighbor_iju.neighbor_ijd = cell
+
+        #set temporary source at origin
+        origin_cell = self.get_cell(src_x,src_y)
+        origin_cell.disease_concentration=0.25
+        origin_cell.type=1
+        origin_cell.bound_type=1 #does nothing so far
+
+        self.active_disease_and_buffer_cells = dict()
+        hash_val = hash_grid_coords(origin_cell.i, origin_cell.j)
+        self.active_disease_and_buffer_cells[hash_val] = [origin_cell]
+        self.reset_cell_types()
+
 
     def get_cell(self, i, j):
         hash_val = hash_grid_coords(i, j)
@@ -89,108 +148,49 @@ class grid:
             if cell.i == i and cell.j == j:
                 return cell
         return None
-    def delete_cell(self, cell):
-        #reconfigure the cell's neighbors:
-        #neighbor in the -x direction
-        if cell.neighbor_id is not None:
-            cell.neighbor_id.neighbor_iu = None
-        #neighbor in the +x direction
-        if cell.neighbor_iu is not None:
-            cell.neighbor_iu.neighbor_id = None
-        #neighbor in the -y direction
-        if cell.neighbor_jd is not None:
-            cell.neighbor_jd.neighbor_ju = None
-        #neighbor in the +y direction
-        if cell.neighbor_ju is not None:
-            cell.neighbor_ju.neighbor_jd = None
-        #neighbor in the -x and -y direction
-        if cell.neighbor_ijd is not None:
-            cell.neighbor_ijd.neighbor_iju = None
-        #neighbor in the +x and +y direction
-        if cell.neighbor_iju is not None:
-            cell.neighbor_iju.neighbor_ijd = None
 
-        #delete
-        hash_val = hash_grid_coords(cell.i, cell.j)
-        self.cell_table[hash_val].pop(self.cell_table[hash_val].index(cell))
 
-    def add_cell(self, i, j):
-        cell = grid_cell(i, j)
-        hash_val = hash_grid_coords(cell.i, cell.j)
-        if hash_val in self.cell_table:
-            self.cell_table[hash_val].append(cell)
-        else:
-            self.cell_table[hash_val] = [cell]
-        # TODO: check if neighbor_cell is in a wall. If so, set its type to 2 (solid).
-
-        #configure the new cell's neighbors:
-        #neighbor in the -x direction
-        neighbor_id = self.get_cell(i-1, j)
-        if neighbor_id is not None:
-            cell.neighbor_id = neighbor_id
-            neighbor_id.neighbor_iu = cell
-        #neighbor in the +x direction
-        neighbor_iu = self.get_cell(i+1, j)
-        if neighbor_iu is not None:
-            cell.neighbor_iu = neighbor_iu
-            neighbor_iu.neighbor_id = cell
-        #neighbor in the -y direction
-        neighbor_jd = self.get_cell(i, j-1)
-        if neighbor_jd is not None:
-            cell.neighbor_jd = neighbor_jd
-            neighbor_jd.neighbor_ju = cell
-        #neighbor in the +y direction
-        neighbor_ju = self.get_cell(i, j+1)
-        if neighbor_ju is not None:
-            cell.neighbor_ju = neighbor_ju
-            neighbor_ju.neighbor_jd = cell
-        #neighbor in the -x and -y direction
-        neighbor_ijd = self.get_cell(i-1, j-1)
-        if neighbor_ijd is not None:
-            cell.neighbor_ijd = neighbor_ijd
-            neighbor_ijd.neighbor_iju = cell
-        #neighbor in the +x and +y direction
-        neighbor_iju = self.get_cell(i+1, j+1)
-        if neighbor_iju is not None:
-            cell.neighbor_iju = neighbor_iju
-            neighbor_iju.neighbor_ijd = cell
-
-        return cell
-
-    def update_grid(self):
-        '''Update the grid based on disease densities'''
+    def reset_cell_types(self):
+        # TODO: elsewhere, make sure that solid cells have density of 0. Assuming active_disease_and_buffer_cells has no solid cells.
+        #reset all cell layers
         cells_in_current_layer = []
-        for cell_list in self.cell_table.values():
+        for cell_list in self.active_disease_and_buffer_cells.values():
             for cell in cell_list:
-                cell.layer = -1
-                if cell.disease_concentration > density_threshold:
-                    cell.type=1 #diseased air
-                    cell.layer=0
+                if cell.disease_concentration < density_threshold:
+                    cell.type=0
+                    cell.layer = -1
+                else:
+                    cell.type=1
+                    cell.layer = 0
                     cells_in_current_layer.append(cell)
-        for index in np.arange(number_of_buffer_layers):
+        #add buffer cells by layer
+        for layer in np.arange(number_of_buffer_layers):
             cells_in_next_layer = []
             for cell in cells_in_current_layer:
-                neighbor_list = [(cell.neighbor_id, (-1,0)), (cell.neighbor_iu, (1,0)), (cell.neighbor_jd, (0,-1)), (cell.neighbor_ju, (0,1))]
-                for neighbor_cell, up_down_tuple in neighbor_list:
+                neighbor_list = [cell.neighbor_id, cell.neighbor_iu, cell.neighbor_jd, cell.neighbor_ju]
+                for neighbor_cell in neighbor_list:
                     if neighbor_cell is not None:
-                        if neighbor_cell.layer==-1 and neighbor_cell.type!=2:
-                            neighbor_cell.layer = index+1
+                        if neighbor_cell.layer == -1 and neighbor_cell.type != 2:
+                            hash_val = hash_grid_coords(neighbor_cell.i, neighbor_cell.j)
+                            if hash_val not in self.active_disease_and_buffer_cells:
+                                self.active_disease_and_buffer_cells[hash_val] = [neighbor_cell]
+                            elif neighbor_cell not in self.active_disease_and_buffer_cells[hash_val]:
+                                self.active_disease_and_buffer_cells[hash_val].append(neighbor_cell)
+                            neighbor_cell.layer = layer + 1
                             cells_in_next_layer.append(neighbor_cell)
-                    else:
-                        i = up_down_tuple[0] + cell.i
-                        j = up_down_tuple[1] + cell.j
-                        neighbor_cell = self.add_cell(i,j)
-                        neighbor_cell.velocity = baseline_velocity
-                        neighbor_cell.layer = index+1
-                        #TODO: need something for sink cells, which are non-solid cells at the border of the simulation.
                         cells_in_next_layer.append(neighbor_cell)
             cells_in_current_layer = cells_in_next_layer
 
-        #delete empty non-buffer cells
-        for cell_list in self.cell_table.values():
+        #delete cells from active if they are beyond the buffer
+        cells_to_remove = []
+        for cell_list in self.active_disease_and_buffer_cells.values():
             for cell in cell_list:
-                if cell.layer == -1:
-                    self.delete_cell(cell)
+                if cell.layer==-1:
+                    cells_to_remove.append(cell)
+        for cell in cells_to_remove:
+            hash_val = hash_grid_coords(cell.i, cell.j)
+            self.active_disease_and_buffer_cells[hash_val].remove(cell)
+
 
     def update_velocities_from_temp_velocities(self):
         '''update the velocities'''
@@ -296,7 +296,6 @@ class grid:
                     velocity_location = np.array([cell.x, cell.y])
                     velocity_location[coord_i] =- 0.5*width
 
-                    #RK2. TODO: confirm I don't need to replace explicit RK2 here with another scheme. Note the time is not incremented here.
                     new_velocity_location = velocity_location - dt*self.interpolate_velocity(velocity_location - 0.5*dt*self.interpolate_velocity(velocity_location, coord_i),coord_i)
                     cell.temp_velocity[coord_i] += self.interpolate_velocity(new_velocity_location, coord_i)
 
@@ -348,20 +347,18 @@ class grid:
          Note: returned Laplacian values are not divided by width^2.'''
         return cell.neighbor_iu.velocity + cell.neighbor_id.velocity + cell.neighbor_ju.velocity + cell.neighbor_jd.velocity - 4*cell.velocity
 
-    def row_assign(self):
+    def row_assign_disease_matrix_solve(self):
         assignment_list = []
-        for cell_list in self.cell_table.values():
+        for cell_list in self.active_disease_and_buffer_cells.values():
             for cell in cell_list:
-                if cell.type != 2:
-                    assignment_list.append(cell)
-                cell.place_in_pressure_matrix = len(assignment_list) - 1
+                assignment_list.append(cell)
                 cell.place_in_disease_matrix = len(assignment_list) - 1
-        num_non_solid_cells = len(assignment_list)
-        return  assignment_list, num_non_solid_cells
+        num_cells = len(assignment_list)
+        return  assignment_list, num_cells
 
     def disease_diffusion_matrix_solve(self):
         #assign a row to each cell
-        assignment_list, num_cells = self.row_assign()
+        assignment_list, num_cells = self.row_assign_disease_matrix_solve()
 
         A_diffusion = np.zeros((num_cells, num_cells))
         b = np.zeros((num_cells))
@@ -375,14 +372,17 @@ class grid:
             for j in np.arange(4):
                 if neighbors[j] is None:
                     neighbor_mask[j] = 0
+                elif neighbors[j].place_in_disease_matrix is None:
+                    neighbor_mask[j] = 0
 
-            A_diffusion[i][i] = -4
+            A_diffusion[i][i] = -4.
             for j in np.arange(4):
                 if neighbor_mask[j] > 0:
                     A_diffusion[i][neighbors[j].place_in_disease_matrix] = 1.
 
             b[i] = -1*cell.disease_concentration
 
+        #print(sum(A_diffusion-A_diffusion.T))
         A_diffusion *= dt * disease_diffusivity_constant / (width * width)
         A_diffusion -= np.identity(A_diffusion.shape[0])
 
@@ -395,8 +395,10 @@ class grid:
             print("CG result is not precise.")
             print(A_diffusion.dot(x))
             print(b)
-        #print(x,sum(x))    #TODO: sum of disease concentration is not conserved.
+        #TODO: sum of disease concentration is not conserved.
+        #print(x,sum(x))
         #print(-b,sum(-b))
+        print("x:",sum(x),"\t\t-b:",sum(-b),"\t\tloss:",sum(-b)-sum(x),"\t\t% loss:",100.*(sum(-b)-sum(x))/sum(-b))
 
         for i in np.arange(num_cells):
             cell = assignment_list[i]
@@ -474,9 +476,8 @@ class grid:
     def advect_disease_densities(self):
         #TODO: not in solids
         #advect
-        for cell_list in self.cell_table.values():
+        for cell_list in self.active_disease_and_buffer_cells.values():
             for cell in cell_list:
-                #TODO this is an explicit RK2, it needs to be replaced by an implicit solve.
                 location = np.array([cell.x, cell.y])
                 velocity = np.array([self.interpolate_velocity(location, 0), self.interpolate_velocity(location, 1)])
                 temp_location = location - 0.5 * dt * velocity
@@ -485,7 +486,7 @@ class grid:
                 cell.temp_disease_concentration = self.interpolate_disease(new_disease_concentration_location)
 
         #do the update
-        for cell_list in self.cell_table.values():
+        for cell_list in self.active_disease_and_buffer_cells.values():
             for cell in cell_list:
                 cell.disease_concentration = cell.temp_disease_concentration
                 cell.temp_disease_concentration *= 0.
@@ -493,7 +494,7 @@ class grid:
                 #dissipation - in this case disease die-off outside of humans
                 cell.disease_concentration = max(0., cell.disease_concentration - disease_die_off_rate * dt) #TODO replace with implicit solve
 
-        self.get_cell(0,0).disease_concentration=0.25 #for temporary source cell  #TODO please delete once no longer necessary, and replace with a different mechanism for sources.
+        self.get_cell(src_x,src_y).disease_concentration=0.25 #for temporary source cell  #TODO please delete once no longer necessary, and replace with a different mechanism for sources.
 
         '''#sum density
         sum_density = 0.
@@ -502,28 +503,17 @@ class grid:
                 sum_density += cell.disease_concentration
         print(sum_density)'''
 
-    def diffuse_disease(self):
-        '''What equation should I use for disease diffusion?????
-
-        Use heat equation. Find the Laplacian at each cell, that is the force.
-        Problem: Implicit mean I need the force in the next time step.
-
-        u_new = u +dt * f(t_new, u_new)
-
-        '''
-        pass
-
     def save_disease_data(self, number, folder, extra_info=""):
         num_diseased_air_cells = 0
         for cell_list in self.cell_table.values():
             for cell in cell_list:
-                if cell.type==1:
+                if cell.disease_concentration>density_threshold:#cell.type==1:
                     num_diseased_air_cells += 1
         data = np.zeros((num_diseased_air_cells, 3))
         cell_index = 0
         for cell_list in self.cell_table.values():
             for cell in cell_list:
-                if cell.type==1:
+                if cell.disease_concentration>density_threshold:#cell.type==1:
                     data[cell_index][0] = cell.x
                     data[cell_index][1] = cell.y
                     data[cell_index][2] = cell.disease_concentration
@@ -535,28 +525,29 @@ class grid:
 
 #TODO: coordinate these with main simulation
 time_steps_dir = "disease_sim_time_steps"
-number_of_time_steps = 1000
 
 if not os.path.isdir(time_steps_dir):
     os.mkdir(time_steps_dir)
 
-images_dir = os.path.join("images")
-if not os.path.isdir(images_dir):
-    os.mkdir(images_dir)
-
-air_and_disease_grid = grid()
+air_and_disease_grid = grid(grid_shape)
 for i in np.arange(number_of_time_steps):
     air_and_disease_grid.save_disease_data(i, time_steps_dir)
 
-    air_and_disease_grid.update_grid()
+    #air_and_disease_grid.update_grid()
     #air_and_disease_grid.backwards_velocity_trace() #TODO: fix bias that turns off x-axis velocity
     #TODO apply forces (wind, solids, etc.) to the airflow???
     air_and_disease_grid.advect_disease_densities()
+    air_and_disease_grid.reset_cell_types()
     #air_and_disease_grid.find_and_apply_pressures()
     air_and_disease_grid.disease_diffusion_matrix_solve()
+    air_and_disease_grid.reset_cell_types()
     #TODO: velocities pointing from non-solid to solid cells should be set to 0
 
 air_and_disease_grid.save_disease_data(number_of_time_steps, time_steps_dir)
+
+images_dir = os.path.join("images")
+if not os.path.isdir(images_dir):
+    os.mkdir(images_dir)
 
 time_steps_per_frame = 1
 draw_data.draw_data(time_steps_dir, images_dir, width/2, number_of_time_steps, time_steps_per_frame)
