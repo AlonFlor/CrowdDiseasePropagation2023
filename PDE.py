@@ -5,6 +5,8 @@ import draw_data
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import cg
 
+#import matplotlib.pyplot as plt
+
 #TODO: maybe remove all physical units from simulation solve steps, and add them in afterwards?
 
 width = 0.1     #each MAC cell is 0.1 meters on each side
@@ -15,15 +17,21 @@ atmospheric_pressure = 1.
 baseline_velocity = np.array([0.,0.])#np.array([3.,-1.])#np.array([1.,-1.])#np.array([3.,0.])# #TODO replace with airflow
 disease_diffusivity_constant = 0.07
 
+
 #TODO: coordinate these with main simulation
 dt = 0.01
-number_of_time_steps = 300#1000
+number_of_time_steps = 100#1000
 #vorticity_confinement_force_strength = 1.
 disease_die_off_rate = 0.
-grid_shape = (80,80)#(256,256)#
-src_x,src_y = -35,0 #temp coords of source TODO: delete when replacing with better sources
+grid_shape = (8,8)#(80,80)#(256,256)#
+min_i = -grid_shape[0] / 2
+max_i = grid_shape[0] / 2 - 1
+min_j = -grid_shape[1] / 2
+max_j = grid_shape[1] / 2 - 1
+src_x,src_y = -3,0 #temp coords of source TODO: delete when replacing with better sources
 
 
+#TODO: handling boundary conditions. This includes enforcement with respect to solids, and ???
 
 
 class grid_cell:
@@ -40,9 +48,11 @@ class grid_cell:
 
         #values in reused functions
         self.vals = dict()
-        self.vals["velocity"] = np.array([0., 0.])      #x coord of velocity located at (self.x-0.5*width, self.y), y coord of velocity located at (self.x, self.y-0.5*width)
+        self.vals["velocity_x"] = 0.        #x coord of velocity located at (self.x-0.5*width, self.y)
+        self.vals["velocity_y"] = 0.        #y coord of velocity located at (self.x, self.y-0.5*width)
+        self.vals["temp_velocity_x"] = 0.   #for updating the velocity
+        self.vals["temp_velocity_y"] = 0.   #for updating the velocity
         self.vals["disease_concentration"] = 0.
-        self.vals["temp_velocity"] = np.array([0., 0.]) #for updating the velocity
         self.vals["temp_disease_concentration"] = np.array([0., 0.]) #for updating the disease density
         #self.vals["curl"] = np.array([0., 0.]) #for calculating the vorticity confinement force
         self.vals["pressure"] = 0.
@@ -64,9 +74,8 @@ def hash_grid_coords(i, j):
 class grid:
     def __init__(self, grid_shape):
         #TODO need to initiate cell_table with cells for sources. Sinks are gas cells right outside the bounds of the simulation.
-        #   To be clear, a source cell is a regular cell except for the fact that it is close to a contagious person, and is needed (ie do not delete) to track that person's disease output
+        #   To be clear, a source cell is a regular cell except for the fact that it is close to a contagious person, and is needed to track that person's disease output
         #       Perhaps we can have an external force at the source location, to push the disease out of the person's mouth.
-        #TODO For now, since I just want somthing out, I will set a source at the origin.
         self.cell_table = dict()
         size_side1, size_side2 = grid_shape
         half_way1 = size_side1/2
@@ -76,7 +85,8 @@ class grid:
             for j_raw in np.arange(size_side2):
                 j = j_raw-half_way2
                 cell = grid_cell(i,j)
-                cell.vals["velocity"] = baseline_velocity #initialize uniform velocities for all cells. TODO: allow alternate velocity field initilization options.
+                cell.vals["velocity_x"] = baseline_velocity[0] #initialize uniform velocities for all cells. TODO: allow alternate velocity field initilization options.
+                cell.vals["velocity_y"] = baseline_velocity[1]
                 hash_val = hash_grid_coords(i, j)
                 if hash_val in self.cell_table:
                     self.cell_table[hash_val].append(cell)
@@ -115,7 +125,7 @@ class grid:
                     cell.neighbor_iju = neighbor_iju
                     neighbor_iju.neighbor_ijd = cell
 
-        #set temporary source at origin
+        #set temporary source   #TODO get rid of this as part of coordinating with main simulation
         origin_cell = self.get_cell(src_x,src_y)
         origin_cell.vals["disease_concentration"]=0.25
         origin_cell.type=1
@@ -179,12 +189,7 @@ class grid:
             hash_val = hash_grid_coords(cell.i, cell.j)
             self.active_disease_and_buffer_cells[hash_val].remove(cell)
 
-
-    #TODO maybe make sure that interpolate_disease and interpolate_velocity produce the correct values.
-    #   Maybe also find a way to merge them for brevity.
-    #   Use cell neighbors stored in cell(i,j)'s list
-
-    def interpolate_disease(self, coords):
+    def interpolate_value(self, coords, value_name):
         x = coords[0] / width
         y = coords[1] / width
         i = int(np.floor(x))
@@ -195,29 +200,29 @@ class grid:
         cell_00 = self.get_cell(i, j)
         if cell_00 is not None:
             cell_00_weight = (i+1-x) * (j+1-y)
-            cell_00_term =  cell_00_weight* cell_00.vals["disease_concentration"]
-            #print(cell_00.vals["disease_concentration"],cell_00_weight,i,x,j,y)
+            cell_00_term =  cell_00_weight* cell_00.vals[value_name]
+            #print(cell_00.vals[value_name],cell_00_weight,i,x,j,y)
             result += cell_00_term
             weight += cell_00_weight
         cell_01 = self.get_cell(i+1, j)
         if cell_01 is not None:
             cell_01_weight = (x-i) * (j+1-y)
-            cell_01_term =  cell_01_weight* cell_01.vals["disease_concentration"]
-            #print(cell_01.vals["disease_concentration"],cell_01_weight)
+            cell_01_term =  cell_01_weight* cell_01.vals[value_name]
+            #print(cell_01.vals[value_name],cell_01_weight)
             result += cell_01_term
             weight += cell_01_weight
         cell_10 = self.get_cell(i, j+1)
         if cell_10 is not None:
             cell_10_weight = (i+1-x) * (y-j)
-            cell_10_term =  cell_10_weight* cell_10.vals["disease_concentration"]
-            #print(cell_10.vals["disease_concentration"],cell_10_weight)
+            cell_10_term =  cell_10_weight* cell_10.vals[value_name]
+            #print(cell_10.vals[value_name],cell_10_weight)
             result += cell_10_term
             weight += cell_10_weight
         cell_11 = self.get_cell(i+1, j+1)
         if cell_11 is not None:
             cell_11_weight = (x-i) * (y-j)
-            cell_11_term =  cell_11_weight* cell_11.vals["disease_concentration"]
-            #print(cell_11.vals["disease_concentration"],cell_11_weight)
+            cell_11_term =  cell_11_weight* cell_11.vals[value_name]
+            #print(cell_11.vals[value_name],cell_11_weight)
             result += cell_11_term
             weight += cell_11_weight
 
@@ -228,78 +233,32 @@ class grid:
 
         return result
 
-    def interpolate_velocity(self, coords, index):
-        x = coords[0] / width
-        y = coords[1] / width
-        i = int(np.floor(x))
-        j = int(np.floor(y))
-
-        result = 0.
-        weight = 0.
-        cell_00 = self.get_cell(i, j)
-        if cell_00 is not None:
-            cell_00_weight = (i+1-x) * (j+1-y)
-            cell_00_term =  cell_00_weight* cell_00.vals["velocity"][index]
-            result += cell_00_term
-            weight += cell_00_weight
-        cell_01 = self.get_cell(i + 1, j)
-        if cell_01 is not None:
-            cell_01_weight = (x-i) * (j+1-y)
-            cell_01_term = cell_01_weight * cell_01.vals["velocity"][index]
-            result += cell_01_term
-            weight += cell_01_weight
-        cell_10 = self.get_cell(i, j + 1)
-        if cell_10 is not None:
-            cell_10_weight = (i+1-x) * (y-j)
-            cell_10_term = cell_10_weight * cell_10.vals["velocity"][index]
-            result += cell_10_term
-            weight += cell_10_weight
-        cell_11 = self.get_cell(i + 1, j + 1)
-        if cell_11 is not None:
-            cell_11_weight = (x-i) * (y-j)
-            cell_11_term = cell_11_weight * cell_11.vals["velocity"][index]
-            result += cell_11_term
-            weight += cell_11_weight
-
-        if weight != 0:
-            result /= weight
-
-        return result
-
 
     def update_velocities_from_temp_velocities(self):
         '''update the velocities'''
         for cell_list in self.cell_table.values():
             for cell in cell_list:
-                cell.vals["velocity"][:] = cell.vals["temp_velocity"][:]
-                cell.vals["temp_velocity"] *= 0.
+                cell.vals["velocity_x"] = cell.vals["temp_velocity_x"]
+                cell.vals["velocity_y"] = cell.vals["temp_velocity_y"]
+                cell.vals["temp_velocity_x"] = 0.
+                cell.vals["temp_velocity_y"] = 0.
 
     def backwards_velocity_trace(self):
-        #TODO: check to make sure not doing this for solids and for clean air.
+        #TODO: check to make sure not doing this for solids.
         #advect
+        coord_names = ["velocity_x","velocity_y"]
         for cell_list in self.cell_table.values():
             for cell in cell_list:
                 for coord_i in np.arange(2):
+                    coord_name = coord_names[coord_i]
                     velocity_location = np.array([cell.x, cell.y])
                     velocity_location[coord_i] =- 0.5*width
 
-                    new_velocity_location = velocity_location - dt*self.interpolate_velocity(velocity_location - 0.5*dt*self.interpolate_velocity(velocity_location, coord_i),coord_i)
-                    cell.vals["temp_velocity"][coord_i] += self.interpolate_velocity(new_velocity_location, coord_i)
-                    #TODO check if "update everyone simultaneously" bug also occurs here
+                    new_velocity_location = velocity_location - dt*self.interpolate_value(velocity_location - 0.5*dt*self.interpolate_value(velocity_location, coord_name),coord_name)
+                    cell.vals["temp_"+coord_name] = cell.vals["temp_"+coord_name] + self.interpolate_value(new_velocity_location, coord_name)
 
         #do the update
         self.update_velocities_from_temp_velocities()
-
-        #TODO please delete once no longer necessary, and replace with a different mechanism for sources.
-        #for area around and including temporary source cell
-        source_cell = self.get_cell(src_x,src_y)
-        source_coords = np.array([source_cell.x, source_cell.y])
-        for cell_list in self.cell_table.values():
-            for cell in cell_list:
-                cell_coords = np.array([cell.x, cell.y])
-                dist = np.linalg.norm(cell_coords-source_coords)
-                if dist < 0.3:
-                    cell.vals["velocity"] = np.array([3.,-1.])# * (1.-dist/0.3)
 
     def advect_disease_densities(self):
         #TODO: not in solids
@@ -307,11 +266,11 @@ class grid:
         for cell_list in self.active_disease_and_buffer_cells.values():
             for cell in cell_list:
                 location = np.array([cell.x, cell.y])
-                velocity = np.array([self.interpolate_velocity(location, 0), self.interpolate_velocity(location, 1)])
+                velocity = np.array([self.interpolate_value(location, "velocity_x"), self.interpolate_value(location, "velocity_y")])
                 temp_location = location - 0.5 * dt * velocity
-                temp_location_velocity = np.array([self.interpolate_velocity(temp_location, 0), self.interpolate_velocity(temp_location, 1)])
+                temp_location_velocity = np.array([self.interpolate_value(temp_location, "velocity_x"), self.interpolate_value(temp_location, "velocity_y")])
                 new_disease_concentration_location = location - dt * temp_location_velocity
-                cell.vals["temp_disease_concentration"] = self.interpolate_disease(new_disease_concentration_location)
+                cell.vals["temp_disease_concentration"] = self.interpolate_value(new_disease_concentration_location, "disease_concentration")
 
         #do the update
         for cell_list in self.active_disease_and_buffer_cells.values():
@@ -320,7 +279,7 @@ class grid:
                 cell.vals["temp_disease_concentration"] *= 0.
 
                 #dissipation - in this case disease die-off outside of humans
-                cell.vals["disease_concentration"] = max(0., cell.vals["disease_concentration"] - disease_die_off_rate * dt) #TODO replace with implicit solve
+                cell.vals["disease_concentration"] = max(0., cell.vals["disease_concentration"] - disease_die_off_rate * dt)
 
         self.get_cell(src_x,src_y).vals["disease_concentration"]=0.25 #for temporary source cell  #TODO please delete once no longer necessary, and replace with a different mechanism for sources.
 
@@ -339,20 +298,20 @@ class grid:
             for cell in cell_list:
                 cell_center = np.array([cell.x, cell.y])
                 if cell.type != 2:
-                    vel_x_on_y_0 = self.interpolate_velocity(cell_center-y_shift,0)
-                    vel_x_on_y_1 = self.interpolate_velocity(cell_center+y_shift,0)
-                    vel_y_on_x_0 = self.interpolate_velocity(cell_center-x_shift,1)
-                    vel_y_on_x_1 = self.interpolate_velocity(cell_center+x_shift,1)
-                    cell.curl = ((vel_y_on_x_1 - vel_y_on_x_0) - (vel_x_on_y_1 - vel_x_on_y_0)) / (0.5*width)'''
+                    vel_x_on_y_0 = self.interpolate_value(cell_center-y_shift,"velocity_x")
+                    vel_x_on_y_1 = self.interpolate_value(cell_center+y_shift,"velocity_x")
+                    vel_y_on_x_0 = self.interpolate_value(cell_center-x_shift,"velocity_y")
+                    vel_y_on_x_1 = self.interpolate_value(cell_center+x_shift,"velocity_y")
+                    cell.vals["curl"] = ((vel_y_on_x_1 - vel_y_on_x_0) - (vel_x_on_y_1 - vel_x_on_y_0)) / (0.5*width)'''
 
     def find_gradient(self, cell, value_name):
         '''Find gradient for the value in the given cell.
-         Done using backwards difference.
+         Done using backward difference.
          Note: returned gradient values are not divided by width.'''
-        id_val = cell.vals[value_name]
+        id_val = 0.#cell.vals[value_name]
         if cell.neighbor_id is not None:
             id_val = cell.neighbor_id.vals[value_name]
-        jd_val = cell.vals[value_name]
+        jd_val = 0.#cell.vals[value_name]
         if cell.neighbor_jd is not None:
             jd_val = cell.neighbor_jd.vals[value_name]
         return np.array([
@@ -360,35 +319,47 @@ class grid:
             cell.vals[value_name] - jd_val
         ])
 
-    def find_divergence(self, cell, value_name):
+    def find_velocity_divergence(self, cell):
         '''Find divergence for the value in the given cell.
          Done using forward difference.
          Note: returned divergence values are not divided by width.'''
-        iu_value = cell.vals[value_name][0]#0.
+        iu_velocity = 0.#cell.vals["velocity_x"]
         if cell.neighbor_iu is not None:
-            iu_value = cell.neighbor_iu.vals[value_name][0]
-        ju_value = cell.vals[value_name][1]#0.
+            iu_velocity = cell.neighbor_iu.vals["velocity_x"]
+        ju_velocity = 0.#cell.vals["velocity_y"]
         if cell.neighbor_ju is not None:
-            ju_value = cell.neighbor_ju.vals[value_name][1]
-        return iu_value + ju_value - cell.vals[value_name][0] - cell.vals[value_name][1]
+            ju_velocity = cell.neighbor_ju.vals["velocity_y"]
+        return iu_velocity + ju_velocity - cell.vals["velocity_x"] - cell.vals["velocity_y"]
 
 
     def find_Laplacian(self, cell, value_name):
         '''Find Laplacian for the value in the given cell.
          Note: returned Laplacian values are not divided by width^2.'''
-        iu_value = cell.vals[value_name]
+        iu_value = 0.#cell.vals[value_name]
         if cell.neighbor_iu is not None:
             iu_value = cell.neighbor_iu.vals[value_name][0]
-        ju_value = cell.vals[value_name]
+        ju_value = 0.#cell.vals[value_name]
         if cell.neighbor_ju is not None:
             ju_value = cell.neighbor_ju.vals[value_name][1]
-        id_value = cell.vals[value_name]
+        id_value = 0.#cell.vals[value_name]
         if cell.neighbor_id is not None:
             id_value = cell.neighbor_id.vals[value_name][0]
-        jd_value = cell.vals[value_name]
+        jd_value = 0.#cell.vals[value_name]
         if cell.neighbor_jd is not None:
             jd_value = cell.neighbor_jd.vals[value_name][1]
         return iu_value + id_value + ju_value + jd_value - 4 * cell.vals[value_name]
+
+    '''def set_pressure_to_boundary_conditions(self):
+        for cell_list in self.cell_table.values():
+            for cell in cell_list:
+                if cell.i==min_i:
+                    cell.vals["pressure"] = self.get_cell(cell.i+1,cell.j).vals["pressure"]
+                if cell.i==max_i:
+                    cell.vals["pressure"] = self.get_cell(cell.i-1,cell.j).vals["pressure"]
+                if cell.j==min_j:
+                    cell.vals["pressure"] = 0.#self.get_cell(cell.i,cell.j+1).vals["pressure"]
+                if cell.j==max_j:
+                    cell.vals["pressure"] = self.get_cell(cell.i,cell.j-1).vals["pressure"]'''
 
     def row_assign_for_matrix_solve(self, type_name):
         assignment_list = []
@@ -398,7 +369,7 @@ class grid:
             cell_list_list = self.cell_table.values()
         for cell_list in cell_list_list:
             for cell in cell_list:
-                if cell.type !=2:
+                if cell.type !=2 and cell.i!=min_i and cell.i!=max_i and cell.j!=min_j and cell.j!=max_j:
                     assignment_list.append(cell)
                     cell.vals[f"place_in_{type_name}_matrix"] = len(assignment_list) - 1
         num_cells = len(assignment_list)
@@ -440,7 +411,7 @@ class grid:
                 b[i] = -1*cell.vals["disease_concentration"]
             if type_name=="pressure":
                 # calculate cell's divergence and add it to b
-                divergence = self.find_divergence(cell, "velocity")
+                divergence = self.find_velocity_divergence(cell)
                 #if abs(divergence) > 0.:
                     #print(cell.i, cell.j, divergence)
                 b[i] = width * divergence / dt
@@ -457,14 +428,20 @@ class grid:
             exit(1)
         if np.linalg.norm(A.dot(x) - b) > 0.000001*num_cells:
             print("CG result is not precise (disease solve).")
-            print("norm =",np.linalg.norm(A.dot(x) - b))
-            print("threshold =",0.0000001*num_cells)
+            print("\tnorm =",np.linalg.norm(A.dot(x) - b))
+            print("\tthreshold =",0.0000001*num_cells)
             #print(A,"\n",x,"\n",b)
             #print(np.linalg.norm(x))
-            exit(1)
+            #exit(1)
 
         if type_name == "disease_concentration":
             print("x:",sum(x),"\t\t-b:",sum(-b),"\t\tloss:",sum(-b)-sum(x),"\t\t% loss:",100.*(sum(-b)-sum(x))/sum(-b))
+
+        if type_name == "pressure":
+            #print(A, "\n", b, "\n", x)
+            print("laplacian of pressure - adjusted divergences:\t", np.linalg.norm(A.dot(x) - b))
+            print("pressure size:",np.linalg.norm(x))
+            #self.set_pressure_to_boundary_conditions()
 
         for i in np.arange(num_cells):
             cell = assignment_list[i]
@@ -474,15 +451,43 @@ class grid:
 
 
     def apply_pressures(self, pressure_solve_cell_list):
-        #TODO this looks like an explicit solution, since velocities are being updated without a matrix solve. Is this OK?
         #apply pressures: update cells' velocities
         for i in np.arange(len(pressure_solve_cell_list)):
             cell = pressure_solve_cell_list[i]
             change_val = dt / width * self.find_gradient(cell, "pressure")
-            cell.vals["velocity"] = cell.vals["velocity"] - change_val  #NOTE: using -= causes all cells to update simultaneously. I don't know why this happens. Beware.
-            if np.linalg.norm(-change_val) > 3.:
-                print(cell.i, cell.j)
-                exit()
+            cell.vals["velocity_x"] = cell.vals["velocity_x"] - change_val[0]  #NOTE: using -= causes all cells to update simultaneously. I don't know why this happens. Beware.
+            cell.vals["velocity_y"] = cell.vals["velocity_y"] - change_val[1]  #NOTE: using -= causes all cells to update simultaneously. I don't know why this happens. Beware.
+            #if np.linalg.norm(-change_val) > 3.:
+            #    print("change > 3 at",cell.i, cell.j)
+            #    exit()
+
+    def enforce_velocity_boundary_conditions(self, time_step):
+        #TODO: I think here is where the air-solid boundary conditions should be enforced. Enforce disease-solid boundary conditions in a separate function.
+
+        #zero velocity on all boundary cells except for top, where velocity is (0.,-2.)
+        for cell_row in self.cell_table.values():
+            for cell in cell_row:
+                if cell.i==min_i or cell.i==max_i or cell.j==min_j:
+                    cell.vals["velocity_x"] = 0.
+                    cell.vals["velocity_y"] = 0.
+                if cell.j==max_j:
+                    cell.vals["velocity_x"] = 0.
+                    cell.vals["velocity_y"] = -.2
+
+        '''#TODO please delete once no longer necessary, and replace with a different mechanism for sources.
+        #for area around and including temporary source cell
+        if time_step < number_of_time_steps/5:
+            print("ENFORCING BOUNDS")
+            source_cell = self.get_cell(src_x,src_y)
+            source_coords = np.array([source_cell.x, source_cell.y])
+            new_baseline_velocity = np.array([.3, -.1])
+            for cell_list in self.cell_table.values():
+                for cell in cell_list:
+                    cell_coords = np.array([cell.x, cell.y])
+                    dist = np.linalg.norm(cell_coords-source_coords)
+                    if dist < 0.3:
+                        cell.vals["velocity_x"] = new_baseline_velocity[0]# * (1.-dist/0.3)
+                        cell.vals["velocity_y"] = new_baseline_velocity[1]# * (1.-dist/0.3)'''
 
 
 
@@ -493,14 +498,29 @@ class grid:
             for cell in cell_list:
                 data[cell_index][0] = cell.x
                 data[cell_index][1] = cell.y
-                data[cell_index][2] = cell.vals["velocity"][0]
-                data[cell_index][3] = cell.vals["velocity"][1]
+                data[cell_index][2] = cell.vals["velocity_x"]
+                data[cell_index][3] = cell.vals["velocity_y"]
                 data[cell_index][4] = cell.vals["disease_concentration"]
                 cell_index += 1
         header = "pos_x,pos_y,vel_x,vel_y,disease_concentration"
         file_handling.write_csv_file(os.path.join(folder, extra_info+str(number)+".csv"), header, data)
 
-
+def velocity_divergence_check(grid,message):
+    print(message)
+    velocity_sum = 0.
+    divergence_sum = 0.
+    abs_divergence_sum = 0.
+    divergences = []
+    for cell_row in grid.cell_table.values():
+        for cell in cell_row:
+            if cell.i!=min_i and cell.i!=max_i and cell.j!=min_j and cell.j!=max_j:
+                velocity_sum += np.linalg.norm(np.array([cell.vals["velocity_x"], cell.vals["velocity_y"]]))
+                divergence_sum += grid.find_velocity_divergence(cell)
+                abs_divergence_sum += abs(grid.find_velocity_divergence(cell))
+                divergences.append(grid.find_velocity_divergence(cell))
+    print("velocity sum:",velocity_sum,"\t\tdivergence sum:",divergence_sum,"\t\tabs divergence sum:",abs_divergence_sum)
+    print("divergences:\n",np.round(np.array(divergences),4).reshape((grid_shape[0]-2,grid_shape[1]-2)))
+    #print("velocity of cell -40, 40:",grid.get_cell(-40,-40).vals["velocity_x"],grid.get_cell(-40,-40).vals["velocity_y"])
 
 #TODO: coordinate these with main simulation
 time_steps_dir = "disease_sim_time_steps"
@@ -514,20 +534,16 @@ for i in np.arange(number_of_time_steps):
 
     #handle airflow
     air_and_disease_grid.backwards_velocity_trace()
+    air_and_disease_grid.enforce_velocity_boundary_conditions(i)
     #TODO apply forces (wind, solids, etc.) to the airflow???
+    velocity_divergence_check(air_and_disease_grid,"before_pressure")#TODO: delete this
     assignment_list = air_and_disease_grid.matrix_solve("pressure")
     air_and_disease_grid.apply_pressures(assignment_list)
+    velocity_divergence_check(air_and_disease_grid,"after_pressure")#TODO: delete this
+    exit()
+    air_and_disease_grid.enforce_velocity_boundary_conditions(i)
+    velocity_divergence_check(air_and_disease_grid,"after_second_enforce")#TODO: delete this
     #TODO: velocities pointing from non-solid to solid cells should be set to 0
-
-    #TODO: delete these rows
-    velocity_sum = 0.
-    divergence_sum = 0.
-    for cell_row in air_and_disease_grid.cell_table.values():
-        for cell in cell_row:
-            velocity_sum += np.linalg.norm(cell.vals["velocity"])
-            divergence_sum += air_and_disease_grid.find_divergence(cell, "velocity")
-    print("velocity sum:",velocity_sum,"\t\tdivergence sum:",divergence_sum)
-    print(air_and_disease_grid.get_cell(-40,-40).vals["velocity"])
 
     #handle disease concentration
     air_and_disease_grid.advect_disease_densities()
@@ -538,6 +554,12 @@ for i in np.arange(number_of_time_steps):
     air_and_disease_grid.row_assign_reset()
 
 air_and_disease_grid.save_data(number_of_time_steps, time_steps_dir)
+
+'''plt.quiver(X[::2, ::2], Y[::2, ::2], u_next[::2, ::2], v_next[::2, ::2], color="black")
+plt.xlim((0, 1))
+plt.ylim((0, 1))
+plt.show()'''
+
 
 images_dir = os.path.join("images")
 if not os.path.isdir(images_dir):

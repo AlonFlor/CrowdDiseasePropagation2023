@@ -59,9 +59,10 @@ def draw_images_for_given_time(frame_count, output_dir, circle_radius, data):
     image2_name = image_name_base + "_velocity_x" + ".png"
     image2 = Image.new("RGB", (1280, 1280), (255, 255, 255))
     draw2 = ImageDraw.Draw(image2)
-    velocity_positive_normalization = lambda a : 1. - max(-a/4., 0.)
-    velocity_neutral_normalization = lambda a : 1. - abs(a/4)
-    velocity_negative_normalization = lambda a : 1. - max(a/4., 0.)
+    velocity_limit = 1.5    #plus or minus this value
+    velocity_positive_normalization = lambda a : 1. - max(-a/velocity_limit, 0.)
+    velocity_neutral_normalization = lambda a : 1. - abs(a/velocity_limit)
+    velocity_negative_normalization = lambda a : 1. - max(a/velocity_limit, 0.)
     draw_fluid_for_single_image(draw2, data, circle_radius, 2, velocity_positive_normalization, velocity_neutral_normalization, velocity_negative_normalization)
 
     image2.save(os.path.join(output_dir, image2_name))
