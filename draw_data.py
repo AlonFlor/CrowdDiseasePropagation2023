@@ -28,11 +28,11 @@ def draw_crowd(draw, data, circle_radius):
         x = row[0]
         y = row[1]
         x_draw = map_to_drawing(x)
-        y_draw = map_to_drawing(y)
+        y_draw = map_to_drawing(-y) #y-axis is upside-down in drawings
 
         circle_bound = [x_draw - circle_radius, y_draw - circle_radius, x_draw + circle_radius, y_draw + circle_radius]
         draw.ellipse(circle_bound, (0, 0, 0))  # (int(groupC[0] * 255), int(groupC[1] * 255), int(groupC[2] * 255)))
-def draw_fluid_for_single_image(draw, data, circle_radius, data_index, normalization_r, normalization_g, normalization_b):
+def draw_fluid_density_for_single_image(draw, data, circle_radius, data_index, normalization_r, normalization_g, normalization_b):
     for row in data:
         x = row[0]
         y = row[1]
@@ -41,10 +41,30 @@ def draw_fluid_for_single_image(draw, data, circle_radius, data_index, normaliza
         color_g = int(256*(normalization_g(amount)))
         color_b = int(256*(normalization_b(amount)))
         x_draw = map_to_drawing(x)
-        y_draw = map_to_drawing(y)
+        y_draw = map_to_drawing(-y) #y-axis is upside-down in drawings
 
         circle_bound = [x_draw - circle_radius, y_draw - circle_radius, x_draw + circle_radius, y_draw + circle_radius]
         draw.ellipse(circle_bound, (color_r, color_g, color_b))  # (int(groupC[0] * 255), int(groupC[1] * 255), int(groupC[2] * 255)))
+
+def draw_fluid_field_for_single_image(name, output_dir, data, data_index_1, data_index_2):
+    skip = 4
+    X = data[:,0]#,skip]
+    Y = data[:,1]#,skip]
+    field_1 = data[:,data_index_1]#,skip]
+    field_2 = data[:,data_index_2]#,skip]
+
+    #test to see if y is upside-down. It is not.
+    #field_2 = np.array([0.5 * i - Y[0] for i in Y])
+
+
+    plt.figure(figsize=(20,10))
+    plt.quiver(X, Y, field_1, field_2, color="black", angles='xy')
+    #plt.xlim((0, 1))
+    #plt.ylim((0, 1))
+    #plt.show()
+    plt.savefig(os.path.join(output_dir, name))
+    plt.close()
+
 
 def draw_images_for_given_time(frame_count, output_dir, circle_radius, data):
     #TODO more orderly and systematic version of these so they can be consolidated, plus systematically define the normalization functions
@@ -53,25 +73,11 @@ def draw_images_for_given_time(frame_count, output_dir, circle_radius, data):
     image1 = Image.new("RGB", (1280, 1280), (255, 255, 255))
     draw1 = ImageDraw.Draw(image1)
     disease_normalization = lambda a : 1.-a*4
-    draw_fluid_for_single_image(draw1, data, circle_radius, 4, disease_normalization, disease_normalization, disease_normalization)
-
+    draw_fluid_density_for_single_image(draw1, data, circle_radius, 4, disease_normalization, disease_normalization, disease_normalization)
     image1.save(os.path.join(output_dir, image1_name))
-    image2_name = image_name_base + "_velocity_x" + ".png"
-    image2 = Image.new("RGB", (1280, 1280), (255, 255, 255))
-    draw2 = ImageDraw.Draw(image2)
-    velocity_limit = 1.5    #plus or minus this value
-    velocity_positive_normalization = lambda a : 1. - max(-a/velocity_limit, 0.)
-    velocity_neutral_normalization = lambda a : 1. - abs(a/velocity_limit)
-    velocity_negative_normalization = lambda a : 1. - max(a/velocity_limit, 0.)
-    draw_fluid_for_single_image(draw2, data, circle_radius, 2, velocity_positive_normalization, velocity_neutral_normalization, velocity_negative_normalization)
 
-    image2.save(os.path.join(output_dir, image2_name))
-    image3_name = image_name_base + "_velocity_y" + ".png"
-    image3 = Image.new("RGB", (1280, 1280), (255, 255, 255))
-    draw3 = ImageDraw.Draw(image3)
-    draw_fluid_for_single_image(draw3, data, circle_radius, 3, velocity_positive_normalization, velocity_neutral_normalization, velocity_negative_normalization)
-
-    image3.save(os.path.join(output_dir, image3_name))
+    image2_name = image_name_base + "_velocity" + ".png"
+    draw_fluid_field_for_single_image(image2_name, output_dir, data, 2, 3)
     #draw_crowd(draw1, data, circle_radius)
 
 def draw_data(input_dir, output_dir, circle_radius_input, number_of_time_steps, time_steps_per_frame):
