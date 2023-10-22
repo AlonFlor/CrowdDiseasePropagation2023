@@ -4,6 +4,7 @@ import file_handling
 import draw_data
 from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import cg
+#import PCG
 
 #TODO: maybe remove all physical units from simulation solve steps, and add them in afterwards?
 
@@ -42,7 +43,7 @@ class grid_cell:
 
         self.layer = -1
         self.type = 0   #three types: clean air=0, diseased air=1, and solid=2
-        self.bound_type = 0    #three types: ordinary cell = 0, source = 1, sink = 2
+        self.bound_type = 0    #three types: ordinary cell = 0, airflow source = 1, airflow sink = 2
 
         #values in reused functions
         self.vals = dict()
@@ -126,14 +127,26 @@ class grid:
         #set solid boundary
         for cell_list in self.cell_table.values():
             for cell in cell_list:
-                if cell.i == min_i or cell.i == max_i or cell.j == min_j or cell.j == max_j:
+                if cell.j == min_j or cell.j == max_j:
                     cell.type=2
+                elif cell.i == min_i:
+                    if cell.j < 0.5*(min_j+max_j):
+                        #cell.type=2#
+                        cell.bound_type=2
+                    else:
+                        cell.type=2
+                elif cell.i == max_i:
+                    if cell.j > 0.5*(min_j+max_j):
+                        #cell.type=2#
+                        cell.bound_type=2
+                    else:
+                        cell.type=2
+
 
         #set temporary source   #TODO get rid of this as part of coordinating with main simulation
         origin_cell = self.get_cell(src_x,src_y)
         origin_cell.vals["disease_concentration"]=0.25
         origin_cell.type=1
-        origin_cell.bound_type=1 #does nothing so far
 
         self.active_disease_and_buffer_cells = dict()
         hash_val = hash_grid_coords(origin_cell.i, origin_cell.j)
@@ -158,9 +171,6 @@ class grid:
         cells_in_current_layer = []
         for cell_list in self.active_disease_and_buffer_cells.values():
             for cell in cell_list:
-                if cell.type==2:
-                    print("solid found!!!") #TODO: delete this
-                    exit()
                 if cell.vals["disease_concentration"] < density_threshold:
                     cell.type=0
                     cell.layer = -1
@@ -197,6 +207,7 @@ class grid:
             self.active_disease_and_buffer_cells[hash_val].remove(cell)
 
     def interpolate_value(self, coords, value_name):
+        #TODO: consider switching to cubic interpolation (pages 39-42 in the Bridson book)
         x = coords[0] / width
         y = coords[1] / width
         i = int(np.floor(x))
@@ -259,10 +270,15 @@ class grid:
                 for coord_i in np.arange(2):
                     coord_name = coord_names[coord_i]
                     velocity_location = np.array([cell.x, cell.y])
-                    velocity_location[coord_i] =- 0.5*width
+                    velocity_location[coord_i] = velocity_location[coord_i] - 0.5*width
 
-                    new_velocity_location = velocity_location - dt*self.interpolate_value(velocity_location - 0.5*dt*self.interpolate_value(velocity_location, coord_name),coord_name)
-                    cell.vals["temp_"+coord_name] = cell.vals["temp_"+coord_name] + self.interpolate_value(new_velocity_location, coord_name)
+                    current_location_velocity = np.array([self.interpolate_value(velocity_location, "velocity_x"), self.interpolate_value(velocity_location, "velocity_y")])
+
+                    temp_location = velocity_location - 0.5*dt*current_location_velocity
+                    temp_location_velocity = np.array([self.interpolate_value(temp_location, "velocity_x"), self.interpolate_value(temp_location, "velocity_y")])
+
+                    new_velocity_location = velocity_location - dt*temp_location_velocity
+                    cell.vals["temp_"+coord_name] = self.interpolate_value(new_velocity_location, coord_name)
 
         #do the update
         self.update_velocities_from_temp_velocities()
@@ -318,9 +334,13 @@ class grid:
         id_val = 0.#cell.vals[value_name]
         if cell.neighbor_id is not None:
             id_val = cell.neighbor_id.vals[value_name]
+            if cell.neighbor_id.type == 2:
+                id_val = cell.vals[value_name]      #counter from solid neighbor
         jd_val = 0.#cell.vals[value_name]
         if cell.neighbor_jd is not None:
             jd_val = cell.neighbor_jd.vals[value_name]
+            if cell.neighbor_jd.type == 2:
+                jd_val = cell.vals[value_name]      #counter from solid neighbor
         return np.array([
             cell.vals[value_name] - id_val,
             cell.vals[value_name] - jd_val
@@ -333,9 +353,19 @@ class grid:
         iu_velocity = 0.#cell.vals["velocity_x"]
         if cell.neighbor_iu is not None:
             iu_velocity = cell.neighbor_iu.vals["velocity_x"]
+            #if cell.neighbor_iu.type==2 and iu_velocity!=0.:
+            #    print("solid-fluid velocity iu:",iu_velocity)
         ju_velocity = 0.#cell.vals["velocity_y"]
         if cell.neighbor_ju is not None:
             ju_velocity = cell.neighbor_ju.vals["velocity_y"]
+            #if cell.neighbor_iu.type==2 and ju_velocity!=0:
+            #    print("solid-fluid velocity ju:",ju_velocity)
+        #if cell.neighbor_id is not None:
+        #    if cell.neighbor_id.type==2 and cell.vals["velocity_x"]!=0:
+        #        print("solid-fluid velocity id:",cell.vals["velocity_x"])
+        #if cell.neighbor_jd is not None:
+        #    if cell.neighbor_jd.type==2 and cell.vals["velocity_y"]!=0:
+        #        print("solid-fluid velocity jd:",cell.vals["velocity_y"])
         return iu_velocity + ju_velocity - cell.vals["velocity_x"] - cell.vals["velocity_y"]
 
 
@@ -376,7 +406,7 @@ class grid:
             cell_list_list = self.cell_table.values()
         for cell_list in cell_list_list:
             for cell in cell_list:
-                if cell.type !=2:
+                if cell.type !=2 and cell.bound_type != 2:
                     assignment_list.append(cell)
                     cell.vals[f"place_in_{type_name}_matrix"] = len(assignment_list) - 1
         num_cells = len(assignment_list)
@@ -388,8 +418,66 @@ class grid:
                 cell.vals["place_in_disease_concentration_matrix"] = None
                 cell.vals["place_in_pressure_matrix"] = None
 
+    '''def setup_matrix_equation(self, type_name):
+        #type_name is "disease_concentration" or "pressure"
+        assignment_list, num_cells = self.row_assign_for_matrix_solve(type_name)
+
+        A_diag = np.zeros((num_cells))
+        A_x = np.zeros((num_cells))
+        A_y = np.zeros((num_cells))
+        b = np.zeros((num_cells))
+
+        #set up A and b
+        for i in np.arange(num_cells):
+            cell = assignment_list[i]
+            neighbors = [cell.neighbor_id, cell.neighbor_iu, cell.neighbor_jd, cell.neighbor_ju]
+            neighbor_mask = [1, 1, 1, 1]
+
+            for j in np.arange(4):
+                if neighbors[j] is None:
+                    neighbor_mask[j] = 0
+                elif neighbors[j].vals[f"place_in_{type_name}_matrix"] is None:
+                    neighbor_mask[j] = 0
+                elif neighbors[j].type==2:
+                    print("solid neighbor")
+                    exit()
+            A_diag[i] = sum(neighbor_mask)
+            if neighbor_mask[1] > 0:
+                A_x[neighbors[1].vals[f"place_in_{type_name}_matrix"]] = -1
+            if neighbor_mask[3] > 0:
+                A_y[neighbors[3].vals[f"place_in_{type_name}_matrix"]] = -1
+
+            #set up b
+            if type_name=="disease_concentration":
+                b[i] = cell.vals["disease_concentration"]
+            if type_name=="pressure":
+                # calculate cell's divergence and subtract it from b
+                divergence = -1*self.find_velocity_divergence(cell)
+                b[i] = width * divergence / dt
+
+        #make changes to A
+        if type_name == "disease_concentration":
+            scale = dt * disease_diffusivity_constant / (width * width)
+            A_diag *= scale
+            A_x *= scale
+            A_y *= scale
+            A_diag += np.ones((num_cells))  #np.identity(A.shape[0])
+
+        return assignment_list, num_cells, A_diag, A_x, A_y, b
+
+    def matrix_solve(self, type_name):
+        assignment_list, num_cells, A_diag, A_x, A_y, b = self.setup_matrix_equation(type_name)
+        tol = 1e-6
+        x = PCG.PCG(tol, A_diag, A_x, A_y, b, assignment_list, type_name)
+
+        for i in np.arange(num_cells):
+            cell = assignment_list[i]
+            cell.vals[type_name] = x[i]'''
+
+
     def matrix_solve(self, type_name):
         #type_name is "disease_concentration" or "pressure"
+        #TODO consider replacing with a vector-based or grid-based solver. See pages 77-78 of Bridson book for the start of a section describing this.
 
         #assign a row to each cell
         assignment_list, num_cells = self.row_assign_for_matrix_solve(type_name)
@@ -406,19 +494,25 @@ class grid:
             for j in np.arange(4):
                 if neighbors[j] is None:
                     neighbor_mask[j] = 0
-                elif neighbors[j].vals[f"place_in_{type_name}_matrix"] is None:
+                elif neighbors[j].type==2:#neighbors[j].vals[f"place_in_{type_name}_matrix"] is None:
                     neighbor_mask[j] = 0
 
-            A[i][i] = -4.
+            A[i][i] = -sum(neighbor_mask)
             for j in np.arange(4):
-                if neighbor_mask[j] > 0:
-                    A[i][neighbors[j].vals[f"place_in_{type_name}_matrix"]] = 1.
+                if neighbors[j] is not None:
+                    if neighbors[j].vals[f"place_in_{type_name}_matrix"] is not None:
+                        A[i][neighbors[j].vals[f"place_in_{type_name}_matrix"]] = 1.
 
+            #set up b
             if type_name=="disease_concentration":
                 b[i] = -1*cell.vals["disease_concentration"]
             if type_name=="pressure":
                 # calculate cell's divergence and add it to b
                 divergence = self.find_velocity_divergence(cell)
+                #for j in np.arange(4):
+                #    if neighbors[j] is not None:
+                #        if neighbors[j].bound_type==2:
+                #            divergence -= atmospheric_pressure
                 #if abs(divergence) > 0.:
                     #print(cell.i, cell.j, divergence)
                 b[i] = width * divergence / dt
@@ -428,11 +522,12 @@ class grid:
             A -= np.identity(A.shape[0])
 
         #do matrix solve
-        #print("sum of A - A^T", sum(sum(A-A.T)))
+        #print(A)
+        #print("det A:", np.linalg.det(A))
         if sum(sum(A-A.T)) != 0.:
             print(f"{type_name} solve matrix not symmetric")
-            exit()
-        x, result = cg(csc_matrix(A), b)
+            exit(1)
+        x, result = cg(csc_matrix(A), b, tol=1e-8)
         if result != 0:
             print("CG failed to converge. Result =",result)
             exit(1)
@@ -485,14 +580,19 @@ class grid:
                     if cell.neighbor_ju is not None:
                         cell.neighbor_ju.vals["velocity_y"]=0.
 
+                if cell.bound_type==2:
+                    if cell.neighbor_id is None:
+                        cell.vals["velocity_x"] = 0.
+                    if cell.neighbor_jd is None:
+                        cell.vals["velocity_y"] = 0.
     def set_airflow_in_cells(self, time_step):
         #TODO please delete once no longer necessary, and replace with a different mechanism for sources.
         #for area around and including temporary source cell
-        if time_step < 0.3*number_of_time_steps:
+        if time_step < 0.2*number_of_time_steps:
             print("SETTING VELOCITY IN AREA")
             source_cell = self.get_cell(src_x,src_y)
             source_coords = np.array([source_cell.x, source_cell.y])
-            new_baseline_velocity = np.array([.3, -.1])
+            new_baseline_velocity = np.array([3., -1.])
 
             #source_cell.vals["velocity_x"] = new_baseline_velocity[0]
             #source_cell.vals["velocity_y"] = new_baseline_velocity[1]
@@ -520,6 +620,7 @@ class grid:
         header = "pos_x,pos_y,vel_x,vel_y,disease_concentration"
         file_handling.write_csv_file(os.path.join(folder, extra_info+str(number)+".csv"), header, data)
 
+
 def velocity_divergence_check(grid,message):
     print(message)
     velocity_sum = 0.
@@ -528,20 +629,39 @@ def velocity_divergence_check(grid,message):
     divergences = []
     velocities_x = []
     velocities_y = []
+    near_boundary_divergences = []
+    near_boundary_divergences_sum = 0.
+    abs_near_boundary_divergences_sum = 0.
+    max_vel = 0.
     for cell_row in grid.cell_table.values():
         for cell in cell_row:
-            if cell.type!=2:
-                velocity_sum += np.linalg.norm(np.array([cell.vals["velocity_x"], cell.vals["velocity_y"]]))
+            if cell.type!=2 and cell.bound_type!=2:
+                vel = np.linalg.norm(np.array([cell.vals["velocity_x"], cell.vals["velocity_y"]]))
+                velocity_sum += vel
+                if vel > max_vel:
+                    max_vel = vel
                 divergence = grid.find_velocity_divergence(cell)
                 divergence_sum += divergence
                 abs_divergence_sum += abs(divergence)
                 divergences.append(divergence)
                 velocities_x.append(cell.vals["velocity_x"])
                 velocities_y.append(cell.vals["velocity_y"])
+                if cell.i == max_i-1 or cell.i==min_i+1 or cell.j == min_j+1 or cell.j == max_j-1:
+                    near_boundary_divergences.append(divergence)
+                    near_boundary_divergences_sum += divergence
+                    abs_near_boundary_divergences_sum += abs(divergence)
+
     print("velocity sum:",velocity_sum,"\t\tdivergence sum:",divergence_sum,
           "\t\tabs divergence sum:",abs_divergence_sum,"\t\taverage abs_divergence_sum",abs_divergence_sum/len(divergences),
-          "\nstd dev abs_divergence_sum",np.std(np.abs(np.array(divergences))),
-          "\t\tworst abs_divergence", np.max(np.abs(np.array(divergences))))
+          "\nabs divergence sum / velocity sum:",abs_divergence_sum/velocity_sum,
+          "\nmax_vel:",max_vel
+          #"\nstd dev abs_divergence_sum",np.std(np.abs(np.array(divergences))),
+          #"\t\tworst abs_divergence", np.max(np.abs(np.array(divergences))),
+          #"\nnear boundary divergence sum:",near_boundary_divergences_sum,
+          #"\t\tnb abs divergence sum:",abs_near_boundary_divergences_sum,"\t\taverage nb abs_divergence_sum",abs_near_boundary_divergences_sum/len(near_boundary_divergences)
+          )
+    if max_vel > 3.*width/dt:
+        print("Possible CFL violation!!!")
 
     #print("divergences:\n",np.round(np.array(divergences),4).reshape((grid_shape[0]-2,grid_shape[1]-2)))
     #print("velocities_x:\n",np.round(np.array(velocities_x),4).reshape((grid_shape[0]-2,grid_shape[1]-2)))
@@ -567,8 +687,8 @@ for i in np.arange(number_of_time_steps):
     assignment_list = air_and_disease_grid.matrix_solve("pressure")
     air_and_disease_grid.apply_pressures(assignment_list)
     velocity_divergence_check(air_and_disease_grid,"after pressure")#TODO: delete this
-    #air_and_disease_grid.enforce_velocity_boundary_conditions()
-    #velocity_divergence_check(air_and_disease_grid,"after second enforcement")#TODO: delete this
+    air_and_disease_grid.enforce_velocity_boundary_conditions()
+    velocity_divergence_check(air_and_disease_grid,"after second enforcement")#TODO: delete this
 
     #handle disease concentration
     air_and_disease_grid.advect_disease_densities()
