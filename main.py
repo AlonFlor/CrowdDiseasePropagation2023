@@ -5,12 +5,15 @@ import file_handling
 from scipy import optimize
 import random
 import time
+import PDE
 
 agent_radius = 0.5
 interaction_radius = 10.
 social_force_strength = 1.
-dt = 1./2.4#1./24.#
+dt = 1./24
 frame_rate = 24.
+time_amount = 3.#10.#30.
+
 is_implicit = True
 scenario_name = "implicit_crowds_8_agents"#"2_agents"#
 
@@ -20,13 +23,22 @@ ttc_power = 3.25
 goal_velocity_coefficient = 2.
 ttc_0 = 3
 
+maximum_disease = 1.
 
-time_amount = 30.
+world_x_length = 18
+world_y_length = 18
 
+MAC_cell_width = 0.1  # each MAC cell is 0.1 meters on each side
+density_threshold = 0.003
+number_of_buffer_layers = 3
+disease_diffusivity_constant = 0.07
+disease_die_off_rate = 0.
+
+grid_shape = (int(np.ceil(world_x_length/MAC_cell_width)),int(np.ceil(world_y_length/MAC_cell_width)))
 
 
 class Person:
-    def __init__(self, position, velocity, destination, desired_speed, disease, immunity):
+    def __init__(self, position, velocity, destination, desired_speed, disease, immunity, is_infectious):
         self.position = position
         self.velocity = velocity
 
@@ -35,6 +47,9 @@ class Person:
 
         self.disease = disease
         self.immunity = immunity
+        self.is_infectious = is_infectious
+        if self.is_infectious:
+            self.disease = maximum_disease
 
         self.disease_change = 0.0
 
@@ -356,7 +371,8 @@ def generate_scenario(total_pop, scenario_number, folder, extra_info=""):
         desired_speed = 1.
         disease = 0.
         immunity = 0.
-        agents.append(Person(position, velocity, destination, desired_speed, disease, immunity))
+        is_infectious = 0.
+        agents.append(Person(position, velocity, destination, desired_speed, disease, immunity, is_infectious))
 
     save_crowd_data(scenario_number, agents, folder, extra_info)
 
@@ -372,7 +388,8 @@ def open_scenario(folder,scenario_name):
         desired_speed = data[i][6]
         disease = data[i][7]
         immunity = data[i][8]
-        agents.append(Person(position, velocity, destination, desired_speed, disease, immunity))
+        is_infectious = data[i][9]
+        agents.append(Person(position, velocity, destination, desired_speed, disease, immunity, is_infectious))
 
     return agents
 
@@ -384,31 +401,64 @@ sim_start = time.perf_counter_ns()
 
 #make folder with scenario name
 if is_implicit:
-    scenario_folder = "implicit_solve_"+scenario_name
+    scenario_output_folder = "implicit_solve_" + scenario_name
 else:
-    scenario_folder = "explicit_solve_"+scenario_name
-scenario_folder += "_dt="+"%.5f"%(dt)
-if not os.path.isdir((scenario_folder)):
-    os.mkdir(scenario_folder)
+    scenario_output_folder = "explicit_solve_" + scenario_name
+scenario_output_folder += "_dt=" + "%.5f" % (dt)
+if not os.path.isdir((scenario_output_folder)):
+    os.mkdir(scenario_output_folder)
 
 #open the scenario
 agents = open_scenario("scenarios",scenario_name)
 pop_num = len(agents)
 number_of_time_steps = int(np.ceil(time_amount / dt))
 
-time_steps_dir = os.path.join(scenario_folder,"time_steps")
-if not os.path.isdir(time_steps_dir):
-    os.mkdir(time_steps_dir)
+#set up data output
+crowd_data_dir = os.path.join(scenario_output_folder, "crowd_data")
+if not os.path.isdir(crowd_data_dir):
+    os.mkdir(crowd_data_dir)
+air_data_dir = os.path.join(scenario_output_folder, "air_data")
+if not os.path.isdir(air_data_dir):
+    os.mkdir(air_data_dir)
 
+#set up air and disease grid
+air_and_disease_grid = PDE.grid(grid_shape, MAC_cell_width, density_threshold, number_of_buffer_layers, disease_diffusivity_constant, disease_die_off_rate)
+
+#main loop
 for i in np.arange(number_of_time_steps):
-    save_crowd_data(i, agents, time_steps_dir)
+    save_crowd_data(i, agents, crowd_data_dir)
+    air_and_disease_grid.save_data(i, air_data_dir)
+
+    #update crowd velocities
     if is_implicit:
         velocities_implicit_solve(agents) #implicit solve for agent velocities
     else:
         get_and_apply_forces(agents) #explicit solve for agent velocities
+
+    #update airflow velocities
+    air_and_disease_grid.backwards_velocity_trace(dt)
+    air_and_disease_grid.set_airflow_in_cells(i, number_of_time_steps) #this applies forces to the airflow
+    air_and_disease_grid.enforce_velocity_boundary_conditions()
+    air_and_disease_grid.velocity_divergence_check("before pressure", dt)#TODO: delete this
+    assignment_list = air_and_disease_grid.matrix_solve("pressure", dt)
+    air_and_disease_grid.apply_pressures(assignment_list, dt)
+    air_and_disease_grid.velocity_divergence_check("after pressure", dt)#TODO: delete this
+    air_and_disease_grid.enforce_velocity_boundary_conditions()
+    air_and_disease_grid.velocity_divergence_check("after second enforcement", dt)#TODO: delete this
+
+    #update disease concentration
+    air_and_disease_grid.advect_disease_densities(dt)
+    air_and_disease_grid.reset_cell_types()
+    air_and_disease_grid.matrix_solve("disease_concentration", dt)
+    air_and_disease_grid.reset_cell_types()
+
+    air_and_disease_grid.row_assign_reset()
+
+    #update crowd positions
     for j in np.arange(pop_num):
         agents[j].update_position()
-save_crowd_data(number_of_time_steps, agents, time_steps_dir)
+save_crowd_data(number_of_time_steps, agents, crowd_data_dir)
+air_and_disease_grid.save_data(number_of_time_steps, air_data_dir)
 
 sim_end = time.perf_counter_ns()
 time_to_run_sims = (sim_end - sim_start) / 1e9
@@ -417,21 +467,22 @@ print("Finished simulation. Moving to drawing.")
 
 draw_start = time.perf_counter_ns()
 time_steps_per_frame = 1./(dt*frame_rate)
-images_dir = os.path.join(scenario_folder,"images")
+images_dir = os.path.join(scenario_output_folder, "images")
 if not os.path.isdir(images_dir):
     os.mkdir(images_dir)
 #TODO: simulate up to frame instead of interpolating?
-draw_data.draw_data(time_steps_dir, images_dir, agent_radius, number_of_time_steps, time_steps_per_frame)
+draw_data.draw_data(crowd_data_dir, images_dir, agent_radius, number_of_time_steps, time_steps_per_frame, "crowd")
+draw_data.draw_data(air_data_dir, images_dir, MAC_cell_width/2, number_of_time_steps, time_steps_per_frame, "air")
 draw_end = time.perf_counter_ns()
 time_to_run_draw = (draw_end - draw_start) / 1e9
 print('Time to draw:', time_to_run_draw, 's\t\t(', time_to_run_draw/3600., 'h)')
 print("Finished drawing. Making a video.")
 
 
-#make the video
-frame_rate = 1/(dt * time_steps_per_frame)
-
-draw_data.make_video(frame_rate, scenario_folder, scenario_folder)
+#make the videos
+draw_data.make_video(frame_rate, scenario_output_folder, image_type_name="_disease")
+draw_data.make_video(frame_rate, scenario_output_folder, image_type_name="_velocity")
+draw_data.make_video(frame_rate, scenario_output_folder, image_type_name="_crowd")
 print("Done")
 
 

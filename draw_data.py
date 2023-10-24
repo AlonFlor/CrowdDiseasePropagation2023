@@ -20,10 +20,10 @@ def plot_data_three_curves(x_axis_data, y_axis_data1, y_axis_data2, y_axis_data3
     plt.show()
 
 
-#TODO y is upside-down for both draw_crowd and draw_disease
 #TODO consider drawing arrows in each crowd agent pointing in the agent's velocity
 
 def draw_crowd(draw, data, circle_radius):
+    #TODO draw disease in people, and draw a border for infectious people
     for row in data:
         x = row[0]
         y = row[1]
@@ -48,10 +48,10 @@ def draw_fluid_density_for_single_image(draw, data, circle_radius, data_index, n
 
 def draw_fluid_field_for_single_image(name, output_dir, data, data_index_1, data_index_2):
     skip = 4
-    X = data[:,0]#,skip]
-    Y = data[:,1]#,skip]
-    field_1 = data[:,data_index_1]#,skip]
-    field_2 = data[:,data_index_2]#,skip]
+    X = data[::skip,0]
+    Y = data[::skip,1]
+    field_1 = data[::skip,data_index_1]
+    field_2 = data[::skip,data_index_2]
 
     #test to see if y is upside-down. It is not.
     #field_2 = np.array([0.5 * i - Y[0] for i in Y])
@@ -66,8 +66,8 @@ def draw_fluid_field_for_single_image(name, output_dir, data, data_index_1, data
     plt.close()
 
 
-def draw_images_for_given_time(frame_count, output_dir, circle_radius, data):
-    #TODO more orderly and systematic version of these so they can be consolidated, plus systematically define the normalization functions
+def draw_fluid_images_for_given_time(frame_count, output_dir, circle_radius, data):
+    #TODO systematically define the disease normalization function based off of the maximum disease concentration in the air
     image_name_base = str(frame_count).zfill(4)
     image1_name = image_name_base + "_disease" + ".png"
     image1 = Image.new("RGB", (1280, 1280), (255, 255, 255))
@@ -76,11 +76,19 @@ def draw_images_for_given_time(frame_count, output_dir, circle_radius, data):
     draw_fluid_density_for_single_image(draw1, data, circle_radius, 4, disease_normalization, disease_normalization, disease_normalization)
     image1.save(os.path.join(output_dir, image1_name))
 
+    #TODO restore this somehow
     image2_name = image_name_base + "_velocity" + ".png"
     draw_fluid_field_for_single_image(image2_name, output_dir, data, 2, 3)
-    #draw_crowd(draw1, data, circle_radius)
 
-def draw_data(input_dir, output_dir, circle_radius_input, number_of_time_steps, time_steps_per_frame):
+def draw_crowd_for_given_time(frame_count, output_dir, circle_radius, data):
+    image_name_base = str(frame_count).zfill(4)
+    image_name = image_name_base + "_crowd" + ".png"
+    image = Image.new("RGB", (1280, 1280), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    draw_crowd(draw, data, circle_radius)
+    image.save(os.path.join(output_dir, image_name))
+
+def draw_data(input_dir, output_dir, circle_radius_input, number_of_time_steps, time_steps_per_frame, data_type):
     circle_radius = scale * circle_radius_input
     frame_count = 0
 
@@ -102,7 +110,11 @@ def draw_data(input_dir, output_dir, circle_radius_input, number_of_time_steps, 
         len_data = min(data[end_time_step].shape[0], data[start_time_step].shape[0]) #TODO this is a method of interpolating for the adaptive grid.
                                                                                      # Please find a different way than trauncation
         data_to_use = (end_time_step-i)*data[start_time_step][:len_data,:] + (i-start_time_step)*data[end_time_step][:len_data,:]
-        draw_images_for_given_time(frame_count, output_dir, circle_radius, data_to_use)
+        if data_type=="crowd":
+            draw_crowd_for_given_time(frame_count, output_dir, circle_radius, data_to_use)
+        if data_type=="air":
+            draw_fluid_images_for_given_time(frame_count, output_dir, circle_radius, data_to_use)
+
         frame_count += 1
     #draw_single_image(frame_count, output_dir, circle_radius, data[len(data)-1])
 
