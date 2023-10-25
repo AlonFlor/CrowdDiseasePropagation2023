@@ -10,9 +10,9 @@ import PDE
 agent_radius = 0.5
 interaction_radius = 10.
 social_force_strength = 1.
-dt = 1./24
+dt = 1./24.
 frame_rate = 24.
-time_amount = 3.#10.#30.
+time_amount = 30.
 
 is_implicit = True
 scenario_name = "implicit_crowds_8_agents"#"2_agents"#
@@ -24,6 +24,8 @@ goal_velocity_coefficient = 2.
 ttc_0 = 3
 
 maximum_disease = 1.
+#disease_person_to_air_coefficient = 1.
+disease_air_to_person_coefficient = 1.
 
 world_x_length = 18
 world_y_length = 18
@@ -31,7 +33,7 @@ world_y_length = 18
 MAC_cell_width = 0.1  # each MAC cell is 0.1 meters on each side
 density_threshold = 0.003
 number_of_buffer_layers = 3
-disease_diffusivity_constant = 0.07
+disease_diffusivity_constant = 0.05    #TODO Different size time step = more diffusion, but loss from one big time step >> loss from several small time steps.
 disease_die_off_rate = 0.
 
 grid_shape = (int(np.ceil(world_x_length/MAC_cell_width)),int(np.ceil(world_y_length/MAC_cell_width)))
@@ -47,11 +49,9 @@ class Person:
 
         self.disease = disease
         self.immunity = immunity
-        self.is_infectious = is_infectious
+        self.is_infectious = True if is_infectious==1.0 else False
         if self.is_infectious:
             self.disease = maximum_disease
-
-        self.disease_change = 0.0
 
     def get_desired_velocity(self):
         displacement = self.destination - self.position
@@ -340,7 +340,22 @@ def save_crowd_data(number, agents, folder, extra_info=""):
     header = "pos_x,pos_y,vel_x,vel_y,dest_x,dest_y,desired_speed,disease,immunity"
     file_handling.write_csv_file(os.path.join(folder, extra_info+str(number)+".csv"), header, data)
 
-#TODO: scenario code will need to include disease, immunity, and contagiousness info, as well as obstacles info. Maybe agents will be split into groups.
+def infect_people(agents, grid):
+    #TODO consider an implicit version of this, perhaps updating agents' disease value for the previous time step using the current time step
+    for agent in agents:
+        disease_at_agent = grid.interpolate_value(agent.position, "disease_concentration")
+        agent.disease += dt * disease_air_to_person_coefficient * disease_at_agent
+        if agent.disease > maximum_disease:
+            agent.disease = maximum_disease
+
+def spread_infection_to_air(agents, grid):
+    for i,agent in enumerate(agents):
+        if agent.is_infectious:
+            grid.distribute_value(agent.position, "disease_concentration", maximum_disease)
+            grid.fixed_airflow_data[i] = (agent.position, 1.5*agent.velocity) #TODO expelled air velocity needs a minimum value and known agent direction for cases of motionless infectious people.
+
+
+#TODO: generate_scenario code will need to include disease, immunity, and contagiousness info, as well as obstacles info. Maybe agents will be split into groups.
 # Change write_csv_file in file_handling to use lists (so int and float can be written together in data)
 def generate_scenario(total_pop, scenario_number, folder, extra_info=""):
     '''Generate a scenario'''
@@ -435,9 +450,12 @@ for i in np.arange(number_of_time_steps):
     else:
         get_and_apply_forces(agents) #explicit solve for agent velocities
 
+    #infect people
+    infect_people(agents, air_and_disease_grid)
+
     #update airflow velocities
     air_and_disease_grid.backwards_velocity_trace(dt)
-    air_and_disease_grid.set_airflow_in_cells(i, number_of_time_steps) #this applies forces to the airflow
+    air_and_disease_grid.set_airflow_in_cells() #this applies forces to the airflow from talking, singing, coughing, sneezing, breezes, and HVAC
     air_and_disease_grid.enforce_velocity_boundary_conditions()
     air_and_disease_grid.velocity_divergence_check("before pressure", dt)#TODO: delete this
     assignment_list = air_and_disease_grid.matrix_solve("pressure", dt)
@@ -449,9 +467,10 @@ for i in np.arange(number_of_time_steps):
     #update disease concentration
     air_and_disease_grid.advect_disease_densities(dt)
     air_and_disease_grid.reset_cell_types()
-    air_and_disease_grid.matrix_solve("disease_concentration", dt)
+    if len(air_and_disease_grid.active_disease_and_buffer_cells.values()) > 0:
+        air_and_disease_grid.matrix_solve("disease_concentration", dt)
+    spread_infection_to_air(agents, air_and_disease_grid)
     air_and_disease_grid.reset_cell_types()
-
     air_and_disease_grid.row_assign_reset()
 
     #update crowd positions
@@ -473,8 +492,8 @@ if not os.path.isdir(images_dir):
 #TODO: simulate up to frame instead of interpolating?
 draw_data.draw_data(crowd_data_dir, images_dir, agent_radius, number_of_time_steps, time_steps_per_frame, "crowd")
 draw_data.draw_data(air_data_dir, images_dir, MAC_cell_width/2, number_of_time_steps, time_steps_per_frame, "air")
+draw_data.overlay_disease_and_crowd(number_of_time_steps, images_dir)
 draw_end = time.perf_counter_ns()
-time_to_run_draw = (draw_end - draw_start) / 1e9
 print('Time to draw:', time_to_run_draw, 's\t\t(', time_to_run_draw/3600., 'h)')
 print("Finished drawing. Making a video.")
 
@@ -483,6 +502,7 @@ print("Finished drawing. Making a video.")
 draw_data.make_video(frame_rate, scenario_output_folder, image_type_name="_disease")
 draw_data.make_video(frame_rate, scenario_output_folder, image_type_name="_velocity")
 draw_data.make_video(frame_rate, scenario_output_folder, image_type_name="_crowd")
+draw_data.make_video(frame_rate, scenario_output_folder, image_type_name="_combined")
 print("Done")
 
 

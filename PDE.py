@@ -5,11 +5,6 @@ from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import cg
 
 
-
-
-src_x,src_y = 0,0#-35,0 #temp coords of source TODO: delete when replacing with better sources
-
-
 class grid_cell:
     def __init__(self, i, j, MAC_cell_width):
         self.i = i
@@ -127,16 +122,8 @@ class grid:
                     else:
                         cell.type=2
 
-
-        #set temporary source   #TODO get rid of this as part of coordinating with main simulation
-        origin_cell = self.get_cell(src_x,src_y)
-        origin_cell.vals["disease_concentration"]=0.25
-        origin_cell.type=1
-
         self.active_disease_and_buffer_cells = dict()
-        hash_val = hash_grid_coords(origin_cell.i, origin_cell.j)
-        self.active_disease_and_buffer_cells[hash_val] = [origin_cell]
-        self.reset_cell_types()
+        self.fixed_airflow_data = dict()
 
 
     def get_cell(self, i, j):
@@ -234,6 +221,42 @@ class grid:
 
         return result
 
+    def distribute_value(self, coords, value_name, value):
+        x = coords[0] / self.MAC_cell_width
+        y = coords[1] / self.MAC_cell_width
+        i = int(np.floor(x))
+        j = int(np.floor(y))
+
+        distributed_list = []
+
+        cell_00 = self.get_cell(i, j)
+        if cell_00 is not None:
+            if cell_00.type != 2:
+                cell_00.vals[value_name] = value
+                distributed_list.append(cell_00)
+        cell_01 = self.get_cell(i+1, j)
+        if cell_01 is not None:
+            if cell_01.type != 2:
+                cell_01.vals[value_name] = value
+                distributed_list.append(cell_01)
+        cell_10 = self.get_cell(i, j+1)
+        if cell_10 is not None:
+            if cell_10.type != 2:
+                cell_10.vals[value_name] = value
+                distributed_list.append(cell_10)
+        cell_11 = self.get_cell(i+1, j+1)
+        if cell_11 is not None:
+            if cell_11.type != 2:
+                cell_11.vals[value_name] = value
+                distributed_list.append(cell_11)
+
+        if value_name=="disease_concentration":
+            for cell in distributed_list:
+                hash_val = hash_grid_coords(cell.i, cell.j)
+                if hash_val not in self.active_disease_and_buffer_cells:
+                    self.active_disease_and_buffer_cells[hash_val] = [cell]
+                elif cell not in self.active_disease_and_buffer_cells[hash_val]:
+                    self.active_disease_and_buffer_cells[hash_val].append(cell)
 
     def update_velocities_from_temp_velocities(self):
         '''update the velocities'''
@@ -284,8 +307,6 @@ class grid:
 
                 #dissipation - in this case disease die-off outside of humans
                 cell.vals["disease_concentration"] = max(0., cell.vals["disease_concentration"] - self.disease_die_off_rate * dt)
-
-        self.get_cell(src_x,src_y).vals["disease_concentration"]=0.25 #for temporary source cell  #TODO please delete once no longer necessary, and replace with a different mechanism for sources.
 
     def find_gradient(self, cell, value_name):
         '''Find gradient for the value in the given cell.
@@ -426,7 +447,6 @@ class grid:
 
         if type_name == "disease_concentration":
             print("x:",sum(x),"\t\t-b:",sum(-b),"\t\tloss:",sum(-b)-sum(x),"\t\t% loss:",100.*(sum(-b)-sum(x))/sum(-b))
-            #TODO with large time steps, disease dissipates too quickly
 
         if type_name == "pressure":
             #print(A, "\n", b, "\n", x)
@@ -470,25 +490,11 @@ class grid:
                         cell.vals["velocity_x"] = 0.
                     if cell.neighbor_jd is None:
                         cell.vals["velocity_y"] = 0.
-    def set_airflow_in_cells(self, time_step, number_of_time_steps):
-        #TODO please delete once no longer necessary, and replace with a different mechanism for sources.
-        # Specifically, add a velocity to cells where someone is coughing/sneezing/talking/singing.
-        #for area around and including temporary source cell
-        if time_step < 0.2*number_of_time_steps:
-            print("SETTING VELOCITY IN AREA")
-            source_cell = self.get_cell(src_x,src_y)
-            source_coords = np.array([source_cell.x, source_cell.y])
-            new_velocity = np.array([3., -1.])
 
-            #source_cell.vals["velocity_x"] = new_velocity[0]
-            #source_cell.vals["velocity_y"] = new_velocity[1]
-            for cell_list in self.cell_table.values():
-                for cell in cell_list:
-                    cell_coords = np.array([cell.x, cell.y])
-                    dist = np.linalg.norm(cell_coords-source_coords)
-                    if dist < 0.3:
-                        cell.vals["velocity_x"] = new_velocity[0]# * (1.-dist/0.3)
-                        cell.vals["velocity_y"] = new_velocity[1]# * (1.-dist/0.3)
+    def set_airflow_in_cells(self):
+        for position,velocity in self.fixed_airflow_data.values():
+            self.distribute_value(position, "velocity_x", velocity[0])
+            self.distribute_value(position, "velocity_y", velocity[1])
 
 
 
@@ -539,7 +545,7 @@ class grid:
 
         print("velocity sum:",velocity_sum,"\t\tdivergence sum:",divergence_sum,
               "\t\tabs divergence sum:",abs_divergence_sum,"\t\taverage abs_divergence_sum",abs_divergence_sum/len(divergences),
-              "\nabs divergence sum / velocity sum:",abs_divergence_sum/velocity_sum,
+              "\nabs divergence sum / velocity sum:",abs_divergence_sum/velocity_sum if velocity_sum>0 else np.NAN,
               "\nmax_vel:",max_vel
               #"\nstd dev abs_divergence_sum",np.std(np.abs(np.array(divergences))),
               #"\t\tworst abs_divergence", np.max(np.abs(np.array(divergences))),
