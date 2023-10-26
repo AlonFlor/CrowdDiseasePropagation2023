@@ -139,8 +139,7 @@ def draw_data(input_dir, output_dir, circle_radius_input, number_of_time_steps, 
         end_time_step = int(i+1)
         #print(i,start_time_step, end_time_step)
 
-        len_data = min(data[end_time_step].shape[0], data[start_time_step].shape[0]) #TODO this is a method of interpolating for the adaptive grid.
-                                                                                     # Please find a different way than trauncation
+        len_data = data[start_time_step].shape[0]
         data_to_use = (end_time_step-i)*data[start_time_step][:len_data,:] + (i-start_time_step)*data[end_time_step][:len_data,:]
         if data_type=="crowd":
             draw_crowd_for_given_time(frame_count, output_dir, circle_radius, data_to_use, obstacles)

@@ -7,14 +7,14 @@ import random
 import time
 import PDE
 
-agent_radius = 0.5
+agent_radius = 0.25
 interaction_radius = 10.
 social_force_strength = 1.
 dt = 1./24.
 frame_rate = 24.
 time_amount = 30.
 
-scenario_name = "implicit_crowds_8_agents"#"2_agents"#
+scenario_name = "bus"#"choir_practice"#"implicit_crowds_8_agents"#"2_agents"#
 
 ttc_smoothing_eps = 0.2
 ttc_constant = 1.5
@@ -26,16 +26,12 @@ maximum_disease = 1.
 #disease_person_to_air_coefficient = 1.
 disease_air_to_person_coefficient = 1.
 
-world_x_length = 18
-world_y_length = 18
-
 MAC_cell_width = 0.1  # each MAC cell is 0.1 meters on each side
 density_threshold = 0.003
 number_of_buffer_layers = 3
 disease_diffusivity_constant = 0.05    #TODO Different size time step = more diffusion, but loss from one big time step >> loss from several small time steps.
 disease_die_off_rate = 0.
 
-grid_shape = (int(np.ceil(world_x_length/MAC_cell_width)),int(np.ceil(world_y_length/MAC_cell_width)))
 
 
 class Person:
@@ -300,7 +296,7 @@ def infect_people(agents, grid):
     #TODO consider an implicit version of this, perhaps updating agents' disease value for the previous time step using the current time step
     for agent in agents:
         disease_at_agent = grid.interpolate_value(agent.position, "disease_concentration")
-        agent.disease += dt * disease_air_to_person_coefficient * disease_at_agent
+        agent.disease += dt * disease_air_to_person_coefficient * disease_at_agent * (1.-agent.immunity)
         if agent.disease > maximum_disease:
             agent.disease = maximum_disease
 
@@ -384,6 +380,20 @@ def open_scenario(folder,scenario_name):
 
     return agents, None
 
+def get_world_dimensions_from_walls(obstacles):
+    min_x = max_x = min_y = max_y = 0.0
+    for obstacle in obstacles:
+        candidate_min_x, candidate_max_x, candidate_min_y, candidate_max_y = obstacle
+        if candidate_min_x < min_x:
+            min_x = candidate_min_x
+        if candidate_max_x > max_x:
+            max_x = candidate_max_x
+        if candidate_min_y < min_y:
+            min_y = candidate_min_y
+        if candidate_max_y > max_y:
+            max_y = candidate_max_y
+
+    return max_x-min_x, max_y-min_y
 
 #generate_scenario(15, 0, "scenarios")
 
@@ -399,6 +409,12 @@ if not os.path.isdir((scenario_output_folder)):
 agents, obstacles = open_scenario("scenarios",scenario_name)
 pop_num = len(agents)
 number_of_time_steps = int(np.ceil(time_amount / dt))
+
+world_x_length = 18
+world_y_length = 18
+if obstacles is not None:
+    world_x_length, world_y_length = get_world_dimensions_from_walls(obstacles)
+grid_shape = (int(np.ceil(world_x_length/MAC_cell_width)),int(np.ceil(world_y_length/MAC_cell_width)))
 
 #set up data output
 crowd_data_dir = os.path.join(scenario_output_folder, "crowd_data")
@@ -427,7 +443,8 @@ for i in np.arange(number_of_time_steps):
     air_and_disease_grid.save_data(i, air_data_dir)
 
     #update crowd velocities
-    velocities_implicit_solve(agents) #implicit solve for agent velocities
+    #TODO restore agent velocities implicit solve
+    #velocities_implicit_solve(agents) #implicit solve for agent velocities
 
     #infect people
     infect_people(agents, air_and_disease_grid)
