@@ -14,7 +14,6 @@ dt = 1./24.
 frame_rate = 24.
 time_amount = 30.
 
-is_implicit = True
 scenario_name = "implicit_crowds_8_agents"#"2_agents"#
 
 ttc_smoothing_eps = 0.2
@@ -79,28 +78,6 @@ def explicit_solve_pairwise_interactions(p1, p2):
 
     social_force = social_force_strength * relative_displacement_vector / (distance * distance)
     return -1*social_force, social_force
-
-
-def get_and_apply_forces(agents):
-    '''Explicit solve (desired velocity force and social force)'''
-    num_agents = len(agents)
-
-    #desired velocity force
-    desired_velocity_forces = np.zeros((num_agents, 2))
-    for i in np.arange(num_agents):
-        agents[i].get_desired_velocity()
-        desired_velocity_forces[i] = goal_velocity_coefficient * (agents[i].desired_velocity - agents[i].velocity)
-
-    #social force
-    social_forces = np.zeros((num_agents, 2))
-    for i in np.arange(num_agents):
-        for j in np.arange(i+1,num_agents):
-            social_force_i, social_force_j = explicit_solve_pairwise_interactions(agents[i], agents[j])
-            social_forces[i] += social_force_i
-            social_forces[j] += social_force_j
-
-    for i in np.arange(num_agents):
-        agents[i].velocity += (desired_velocity_forces[i] + social_forces[i]) * dt
 
 
 def ttci_energy(relative_positions, relative_velocities, combined_radius):
@@ -185,7 +162,7 @@ def potential_energy_value_and_gradient(velocity_vector, agents):
                 velocity_j = velocity_vector[2*j:2*j+2]
                 position_j_new = agents[j].position + velocity_j*dt
 
-                #use distance after a time step
+                #distance potential
                 displacement_after = position_j_new - position_i_new
                 dist_after = np.linalg.norm(displacement_after)
                 modified_dist_after = dist_after - 2.*agent_radius
@@ -194,67 +171,7 @@ def potential_energy_value_and_gradient(velocity_vector, agents):
                 social_force_gradient[2 * i:2 * i + 2] -= local_gradient
                 social_force_gradient[2 * j:2 * j + 2] += local_gradient
 
-                #use minimum distance between current and after a time step (helps with tunneling)
-                '''current_displacement = agents[j].position - agents[i].position
-                displacement_after = agents[j].position + velocity_j*dt - (agents[i].position + velocity_i*dt)
-                displacement_diff = displacement_after - current_displacement
-                numerator = np.dot(displacement_after, displacement_diff)
-                denominator = np.dot(displacement_diff, displacement_diff) + 0.0001
-                min_dist_factor = numerator / denominator
-                #print("min_dist_factor", min_dist_factor)
-                if min_dist_factor <= 0.:
-                    min_dist_factor = 0.
-                    min_dist_factor_gradient = 0.
-                elif min_dist_factor >= 1.:
-                    min_dist_factor = 1.
-                    min_dist_factor_gradient = 0.
-                else:
-                    min_dist_factor_gradient = 1.#(2 * displacement_after * dt - current_displacement * dt - 2 * current_displacement * denominator * dt) / (denominator * denominator)
-                    print("min_dist_factor",min_dist_factor)
-                    print("min_dist_factor_gradient",min_dist_factor_gradient)
-                min_displacement = (1. - min_dist_factor) * displacement_after + min_dist_factor * current_displacement
-                min_displacement_gradient = dt - dt*min_dist_factor - displacement_after * min_dist_factor_gradient + current_displacement * min_dist_factor_gradient
-                min_dist = np.linalg.norm(min_displacement)
-                value += social_force_strength / min_dist
-                local_gradient = -1*social_force_strength * min_displacement * min_displacement_gradient / np.power(min_dist, 3)
-
-                social_force_gradient[2*i:2*i+2] -= local_gradient
-                social_force_gradient[2*j:2*j+2] += local_gradient'''
-
-                #use the distance energy found in the Implicit Crowds code (also helps with tunneling, but not in the paper)
-                '''current_displacement = agents[j].position - agents[i].position
-                velocity_diff = velocity_j - velocity_i
-                speed_of_collision = velocity_diff[0]*velocity_diff[0] + velocity_diff[1]*velocity_diff[1]
-                time_to_impact = -1*np.dot(current_displacement, velocity_diff) / (speed_of_collision + 0.0001)
-                time_to_impact = max(min(time_to_impact, dt), 0.) #<0 = agents are diverging, >0 and <dt = potential to tunnel, >dt: use dt because this is implicit
-                print("time_to_impact",time_to_impact)
-
-                #get minimum distance between the agents within this time step
-                min_displacement = velocity_diff * time_to_impact - current_displacement
-                min_distance = np.linalg.norm(min_displacement)
-
-                ##collision or tunneling. Either way, this is not an applicable velocity.
-                #if min_distance <= agent_radius:
-                #    got_infinity = True
-                #    break
-
-                #distance = min_distance - agent_radius
-                value += social_force_strength / min_distance#distance
-
-                #get the gradient
-                time_to_impact_derivatives = np.array([0., 0.])
-                if time_to_impact >0 and time_to_impact < dt:
-                    time_to_impact_derivatives = (current_displacement + 2*time_to_impact*velocity_diff) / speed_of_collision
-                distance_derivative = np.array([
-                    min_displacement[0] * (time_to_impact + velocity_diff[0] * time_to_impact_derivatives[0]) + min_displacement[1] * velocity_diff[1] * time_to_impact_derivatives[1],
-                    min_displacement[1] * (time_to_impact + velocity_diff[1] * time_to_impact_derivatives[1]) + min_displacement[0] * velocity_diff[0] * time_to_impact_derivatives[0]
-                ])
-                distance_derivative *= - social_force_strength / (min_distance * min_distance * min_distance)#(min_distance * distance * distance)
-                print("distance_derivative", distance_derivative)
-
-                social_force_gradient[2*i:2*i+2] -= distance_derivative
-                social_force_gradient[2*j:2*j+2] += distance_derivative
-                print("social_force_gradient", social_force_gradient)'''
+                #TODO: consider anti-tunneling code
 
                 #time to contact potential
                 relative_positions = position_j_new - position_i_new
@@ -265,6 +182,39 @@ def potential_energy_value_and_gradient(velocity_vector, agents):
                     value += ttci_energy_value
                     ttci_gradient[2 * i:2 * i + 2] -= ttci_energy_gradient
                     ttci_gradient[2 * j:2 * j + 2] += ttci_energy_gradient
+
+        #distance and TTC potentials with respect to obstacles
+        for j in np.arange(len(obstacles)):
+            obstacle = obstacles[j]
+            current_signed_distance, _ = obstacle_signed_distance_and_gradient(obstacle, agents[i].position)
+            obstacle_signed_distance, obstacle_gradient = obstacle_signed_distance_and_gradient(obstacle, position_i_new)
+            if current_signed_distance < interaction_radius:
+                modified_dist = obstacle_signed_distance - agent_radius
+                #distance potential
+                value += social_force_strength / modified_dist
+                local_gradient = -1 * social_force_strength * obstacle_gradient * dt / (modified_dist * modified_dist)
+                social_force_gradient[2 * i:2 * i + 2] += local_gradient
+
+                #time to contact potential
+                relative_positions = np.array([0., 0.])
+                if obstacle_gradient[0] > 0.:
+                    #obstacle right - agent pos x
+                    relative_positions[0] = obstacle[1] - position_i_new[0]
+                elif obstacle_gradient[0] < 0.:
+                    #obstacle left - agent pos x
+                    relative_positions[0] = obstacle[0] - position_i_new[0]
+                if obstacle_gradient[1] > 0.:
+                    #obstalce top - agent pos y
+                    relative_positions[1] = obstacle[3] - position_i_new[1]
+                elif obstacle_gradient[1] < 0.:
+                    #obstacle bottom - agent pos y
+                    relative_positions[1] = obstacle[2] - position_i_new[1]
+                relative_velocities = - velocity_i
+                ttci_energy_result = ttci_energy(relative_positions, relative_velocities, agent_radius)
+                if ttci_energy_result is not None:
+                    ttci_energy_value, ttci_energy_gradient = ttci_energy_result
+                    value += ttci_energy_value
+                    ttci_gradient[2 * i:2 * i + 2] -= ttci_energy_gradient
 
     #print(np.linalg.norm(gradient))
     #print(social_force_gradient)
@@ -285,35 +235,41 @@ def velocities_implicit_solve(agents):
         agents[i].get_desired_velocity()
 
     velocity_vector = np.zeros((num_agents*2))
-    '''potential_energy_value_and_gradient(velocity_vector, agents)
-    print("That's all there is for now")
-    exit()'''
     result = optimize.minimize(potential_energy_value_and_gradient, velocity_vector, args=(agents), jac=True)
     print(f"{result.nit} iterations\tresult={result.fun}, gradient size = {np.linalg.norm(result.jac)}\t\tsuccess={result.success}\tmessage={result.message}\n")
     new_velocity_vector = result.x
 
     if not result.success:
         #debug this
-        velocity_vector = np.zeros((num_agents * 2))
-        x_speeds = []
-        values = []
-        actual_gradients = []
-        gradients = []
-        dv = 0.01
-        for second_agent_x_speed in np.arange(-5.,5.,dv):
-            velocity_vector[2] = second_agent_x_speed
-            value, gradient = potential_energy_value_and_gradient(velocity_vector, agents)
-            x_speeds.append(second_agent_x_speed)
-            values.append(value)
-            gradients.append(gradient[2])
-        for i in np.arange(len(x_speeds)):
-            if i<2 or i>len(x_speeds)-3:
-                actual_gradients.append(np.nan)
-            else:
-                actual_gradients.append((-values[i+2] + 8*values[i+1] - 8*values[i-1] + values[i-2])/(12.*dv))
-        draw_data.plot_data_three_curves(x_speeds, values, actual_gradients, gradients)
-        #draw_data.plot_data_two_curves(x_speeds, values, actual_gradients)
-        exit()
+        #print(potential_energy_value_and_gradient(velocity_vector, agents),"\n")
+        orig_velocity_vector = np.zeros((num_agents * 2))
+        for idx in np.arange(orig_velocity_vector.shape[0]):
+            orig_velocity_vector[idx] = velocity_vector[idx]
+        for idx in np.arange(velocity_vector.shape[0]):
+            print(idx)
+            velocity_vector = np.zeros((num_agents * 2))
+            for idx_2 in np.arange(velocity_vector.shape[0]):
+                velocity_vector[idx_2] = orig_velocity_vector[idx_2]
+            x_speeds = []
+            values = []
+            actual_gradients = []
+            gradients = []
+            dv = 0.01
+            for chosen_agent_coord_speed in np.arange(-5.,5.,dv):
+                velocity_vector[idx] = chosen_agent_coord_speed
+                value, gradient = potential_energy_value_and_gradient(velocity_vector, agents)
+                x_speeds.append(chosen_agent_coord_speed)
+                values.append(value)
+                gradients.append(gradient[idx])
+            for i in np.arange(len(x_speeds)):
+                if i<2 or i>len(x_speeds)-3:
+                    actual_gradients.append(np.nan)
+                else:
+                    actual_gradients.append((-values[i+2] + 8*values[i+1] - 8*values[i-1] + values[i-2])/(12.*dv))
+            draw_data.plot_data_three_curves(x_speeds, values, actual_gradients, gradients)
+            draw_data.plt.close()
+            #draw_data.plot_data_two_curves(x_speeds, values, actual_gradients)
+        exit(1)
 
 
     for i in np.arange(num_agents):
@@ -355,7 +311,19 @@ def spread_infection_to_air(agents, grid):
             grid.fixed_airflow_data[i] = (agent.position, 1.5*agent.velocity) #TODO expelled air velocity needs a minimum value and known agent direction for cases of motionless infectious people.
 
 
-#TODO: generate_scenario code will need to include disease, immunity, and contagiousness info, as well as obstacles info. Maybe agents will be split into groups.
+def obstacle_signed_distance_and_gradient(obstacle, point):
+    # inside obstacle, distance value does not matter, but distance sign does matter
+    left,right,bottom,top = obstacle
+    dist_list = np.array([left - point[0], point[0] - right, bottom - point[1], point[1] - top])
+    grad_list = [np.array([-1.,0.]), np.array([1.,0.]), np.array([0.,-1.]), np.array([0.,1.])]
+    dist_arg = np.argmax(dist_list)
+
+    return dist_list[dist_arg], grad_list[dist_arg]
+
+
+
+
+#TODO: generate_scenario code will need to include disease, immunity, and contagiousness info, and will need to generate an obstacles file. Maybe agents will be split into groups.
 # Change write_csv_file in file_handling to use lists (so int and float can be written together in data)
 def generate_scenario(total_pop, scenario_number, folder, extra_info=""):
     '''Generate a scenario'''
@@ -406,7 +374,15 @@ def open_scenario(folder,scenario_name):
         is_infectious = data[i][9]
         agents.append(Person(position, velocity, destination, desired_speed, disease, immunity, is_infectious))
 
-    return agents
+    obstacles_file_path = os.path.join(folder, scenario_name + "_obstacles.csv")
+    if os.path.isfile(obstacles_file_path):
+        obstacles_data = file_handling.read_numerical_csv_file(obstacles_file_path)
+        #for i in np.arange(obstacles_data.shape[0]):
+        #    row = obstacles_data[i]
+        #    obstacles.append([np.array([row[0], row[2]]), np.array([row[0], row[3]]), np.array(row[1], row[2]), np.array(row[1], row[3])])
+        return agents, obstacles_data
+
+    return agents, None
 
 
 #generate_scenario(15, 0, "scenarios")
@@ -415,16 +391,12 @@ def open_scenario(folder,scenario_name):
 sim_start = time.perf_counter_ns()
 
 #make folder with scenario name
-if is_implicit:
-    scenario_output_folder = "implicit_solve_" + scenario_name
-else:
-    scenario_output_folder = "explicit_solve_" + scenario_name
-scenario_output_folder += "_dt=" + "%.5f" % (dt)
+scenario_output_folder = scenario_name + "_dt=" + ("%.5f" % (dt))
 if not os.path.isdir((scenario_output_folder)):
     os.mkdir(scenario_output_folder)
 
 #open the scenario
-agents = open_scenario("scenarios",scenario_name)
+agents, obstacles = open_scenario("scenarios",scenario_name)
 pop_num = len(agents)
 number_of_time_steps = int(np.ceil(time_amount / dt))
 
@@ -439,21 +411,29 @@ if not os.path.isdir(air_data_dir):
 #set up air and disease grid
 air_and_disease_grid = PDE.grid(grid_shape, MAC_cell_width, density_threshold, number_of_buffer_layers, disease_diffusivity_constant, disease_die_off_rate)
 
+#set up the solid cells in the air and disease grid
+for cell_list in air_and_disease_grid.cell_table.values():
+    for cell in cell_list:
+        cell_pos = np.array([cell.x, cell.y])
+        for obstacle in obstacles:
+            sd, _ = obstacle_signed_distance_and_gradient(obstacle, cell_pos)
+            if sd <= 0.:
+                cell.type=2
+
 #main loop
 for i in np.arange(number_of_time_steps):
+    print("Step:",i,"out of",number_of_time_steps)
     save_crowd_data(i, agents, crowd_data_dir)
     air_and_disease_grid.save_data(i, air_data_dir)
 
     #update crowd velocities
-    if is_implicit:
-        velocities_implicit_solve(agents) #implicit solve for agent velocities
-    else:
-        get_and_apply_forces(agents) #explicit solve for agent velocities
+    velocities_implicit_solve(agents) #implicit solve for agent velocities
 
     #infect people
     infect_people(agents, air_and_disease_grid)
 
-    #update airflow velocities
+    #TODO: restore airflow solve
+    '''#update airflow velocities
     air_and_disease_grid.backwards_velocity_trace(dt)
     air_and_disease_grid.set_airflow_in_cells() #this applies forces to the airflow from talking, singing, coughing, sneezing, breezes, and HVAC
     air_and_disease_grid.enforce_velocity_boundary_conditions()
@@ -462,7 +442,7 @@ for i in np.arange(number_of_time_steps):
     air_and_disease_grid.apply_pressures(assignment_list, dt)
     air_and_disease_grid.velocity_divergence_check("after pressure", dt)#TODO: delete this
     air_and_disease_grid.enforce_velocity_boundary_conditions()
-    air_and_disease_grid.velocity_divergence_check("after second enforcement", dt)#TODO: delete this
+    air_and_disease_grid.velocity_divergence_check("after second enforcement", dt)#TODO: delete this'''
 
     #update disease concentration
     air_and_disease_grid.advect_disease_densities(dt)
@@ -481,7 +461,7 @@ air_and_disease_grid.save_data(number_of_time_steps, air_data_dir)
 
 sim_end = time.perf_counter_ns()
 time_to_run_sims = (sim_end - sim_start) / 1e9
-print('Time to run simulations:', time_to_run_sims, 's\t\t(', time_to_run_sims/3600., 'h)')
+print('Time to run simulations:', time_to_run_sims, 's\t\t(', time_to_run_sims/60., 'm)\t\t(', time_to_run_sims/3600., 'h)')
 print("Finished simulation. Moving to drawing.")
 
 draw_start = time.perf_counter_ns()
@@ -490,11 +470,12 @@ images_dir = os.path.join(scenario_output_folder, "images")
 if not os.path.isdir(images_dir):
     os.mkdir(images_dir)
 #TODO: simulate up to frame instead of interpolating?
-draw_data.draw_data(crowd_data_dir, images_dir, agent_radius, number_of_time_steps, time_steps_per_frame, "crowd")
-draw_data.draw_data(air_data_dir, images_dir, MAC_cell_width/2, number_of_time_steps, time_steps_per_frame, "air")
+draw_data.draw_data(crowd_data_dir, images_dir, agent_radius, number_of_time_steps, time_steps_per_frame, "crowd", obstacles)
+draw_data.draw_data(air_data_dir, images_dir, MAC_cell_width/2, number_of_time_steps, time_steps_per_frame, "air", obstacles)
 draw_data.overlay_disease_and_crowd(number_of_time_steps, images_dir)
 draw_end = time.perf_counter_ns()
-print('Time to draw:', time_to_run_draw, 's\t\t(', time_to_run_draw/3600., 'h)')
+time_to_run_draw = draw_end - draw_start
+print('Time to draw:', time_to_run_draw, 's\t\t(', time_to_run_draw/60., 'm)\t\t(', time_to_run_draw/3600., 'h)')
 print("Finished drawing. Making a video.")
 
 

@@ -104,23 +104,11 @@ class grid:
                     cell.neighbor_iju = neighbor_iju
                     neighbor_iju.neighbor_ijd = cell
 
-        #set solid boundary
+        #set boundary cells
         for cell_list in self.cell_table.values():
             for cell in cell_list:
-                if cell.j == self.min_j or cell.j == self.max_j:
-                    cell.type=2
-                elif cell.i == self.min_i:
-                    if cell.j < 0.5*(self.min_j+self.max_j):
-                        #cell.type=2#
-                        cell.bound_type=1
-                    else:
-                        cell.type=2
-                elif cell.i == self.max_i:
-                    if cell.j > 0.5*(self.min_j+self.max_j):
-                        #cell.type=2#
-                        cell.bound_type=1
-                    else:
-                        cell.type=2
+                if cell.i == self.min_i or cell.i == self.max_i or cell.j == self.min_j or cell.j == self.max_j:
+                    cell.bound_type=1
 
         self.active_disease_and_buffer_cells = dict()
         self.fixed_airflow_data = dict()

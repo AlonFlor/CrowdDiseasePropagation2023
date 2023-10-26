@@ -22,6 +22,14 @@ def plot_data_three_curves(x_axis_data, y_axis_data1, y_axis_data2, y_axis_data3
 
 #TODO consider drawing arrows in each crowd agent pointing in the agent's velocity
 
+def draw_obstacles(draw, obstacles):
+    #draw obstacles
+    for left,right,bottom,top in obstacles:
+        left_draw = map_to_drawing(left)
+        right_draw = map_to_drawing(right)
+        bottom_draw = map_to_drawing(-bottom) #y-axis is upside-down in drawings
+        top_draw = map_to_drawing(-top) #y-axis is upside-down in drawings
+        draw.rectangle([left_draw,top_draw,right_draw,bottom_draw], fill=(0, 0, 0))
 
 def overlay_images(image_1_path, image_2_path, new_image_path):
     image_1 = np.array(Image.open(image_1_path))
@@ -39,7 +47,7 @@ def overlay_disease_and_crowd(number_of_time_steps, output_dir):
 
         overlay_images(image1_path, image2_path, image3_path)
 
-def draw_crowd(draw, data, circle_radius):
+def draw_crowd(draw, data, circle_radius, obstacles):
     #TODO draw disease in people, and draw a border for infectious people
     for row in data:
         x = row[0]
@@ -51,7 +59,11 @@ def draw_crowd(draw, data, circle_radius):
 
         circle_bound = [x_draw - circle_radius, y_draw - circle_radius, x_draw + circle_radius, y_draw + circle_radius]
         draw.ellipse(circle_bound, (int(255.*disease), 0, 0))  # (int(groupC[0] * 255), int(groupC[1] * 255), int(groupC[2] * 255)))
-def draw_fluid_density_for_single_image(draw, data, circle_radius, data_index, normalization_r, normalization_g, normalization_b):
+
+    if obstacles is not None:
+        draw_obstacles(draw, obstacles)
+
+def draw_fluid_density_for_single_image(draw, data, circle_radius, data_index, normalization_r, normalization_g, normalization_b, obstacles):
     for row in data:
         x = row[0]
         y = row[1]
@@ -64,6 +76,9 @@ def draw_fluid_density_for_single_image(draw, data, circle_radius, data_index, n
 
         circle_bound = [x_draw - circle_radius, y_draw - circle_radius, x_draw + circle_radius, y_draw + circle_radius]
         draw.ellipse(circle_bound, (color_r, color_g, color_b))  # (int(groupC[0] * 255), int(groupC[1] * 255), int(groupC[2] * 255)))
+
+    if obstacles is not None:
+        draw_obstacles(draw, obstacles)
 
 def draw_fluid_field_for_single_image(name, output_dir, data, data_index_1, data_index_2):
     skip = 4
@@ -85,27 +100,27 @@ def draw_fluid_field_for_single_image(name, output_dir, data, data_index_1, data
     plt.close()
 
 
-def draw_fluid_images_for_given_time(frame_count, output_dir, circle_radius, data):
+def draw_fluid_images_for_given_time(frame_count, output_dir, circle_radius, data, obstacles):
     image_name_base = str(frame_count).zfill(4)
     image1_name = image_name_base + "_disease" + ".png"
     image1 = Image.new("RGB", (1280, 1280), (255, 255, 255))
     draw1 = ImageDraw.Draw(image1)
     disease_normalization = lambda a : 1.-a
-    draw_fluid_density_for_single_image(draw1, data, circle_radius, 4, disease_normalization, disease_normalization, disease_normalization)
+    draw_fluid_density_for_single_image(draw1, data, circle_radius, 4, disease_normalization, disease_normalization, disease_normalization, obstacles)
     image1.save(os.path.join(output_dir, image1_name))
 
     image2_name = image_name_base + "_velocity" + ".png"
     draw_fluid_field_for_single_image(image2_name, output_dir, data, 2, 3)
 
-def draw_crowd_for_given_time(frame_count, output_dir, circle_radius, data):
+def draw_crowd_for_given_time(frame_count, output_dir, circle_radius, data, obstacles):
     image_name_base = str(frame_count).zfill(4)
     image_name = image_name_base + "_crowd" + ".png"
     image = Image.new("RGB", (1280, 1280), (255, 255, 255))
     draw = ImageDraw.Draw(image)
-    draw_crowd(draw, data, circle_radius)
+    draw_crowd(draw, data, circle_radius, obstacles)
     image.save(os.path.join(output_dir, image_name))
 
-def draw_data(input_dir, output_dir, circle_radius_input, number_of_time_steps, time_steps_per_frame, data_type):
+def draw_data(input_dir, output_dir, circle_radius_input, number_of_time_steps, time_steps_per_frame, data_type, obstacles=None):
     circle_radius = scale * circle_radius_input
     frame_count = 0
 
@@ -128,9 +143,9 @@ def draw_data(input_dir, output_dir, circle_radius_input, number_of_time_steps, 
                                                                                      # Please find a different way than trauncation
         data_to_use = (end_time_step-i)*data[start_time_step][:len_data,:] + (i-start_time_step)*data[end_time_step][:len_data,:]
         if data_type=="crowd":
-            draw_crowd_for_given_time(frame_count, output_dir, circle_radius, data_to_use)
+            draw_crowd_for_given_time(frame_count, output_dir, circle_radius, data_to_use, obstacles)
         if data_type=="air":
-            draw_fluid_images_for_given_time(frame_count, output_dir, circle_radius, data_to_use)
+            draw_fluid_images_for_given_time(frame_count, output_dir, circle_radius, data_to_use, obstacles)
 
         frame_count += 1
     #draw_single_image(frame_count, output_dir, circle_radius, data[len(data)-1])
