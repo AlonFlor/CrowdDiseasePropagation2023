@@ -12,9 +12,9 @@ interaction_radius = 10.
 social_force_strength = 1.
 dt = 1./24.
 frame_rate = 24.
-time_amount = 30.
+time_amount = 1.#30.
 
-scenario_name = "bus"#"choir_practice"#"implicit_crowds_8_agents"#"2_agents"#
+scenario_name = "restaurant"#"bus"#"choir_practice"#"implicit_crowds_8_agents"#"2_agents"#
 
 ttc_smoothing_eps = 0.2
 ttc_constant = 1.5
