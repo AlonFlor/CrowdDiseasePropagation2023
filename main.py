@@ -12,9 +12,9 @@ interaction_radius = 10.
 social_force_strength = 1.
 dt = 1./24.
 frame_rate = 24.
-time_amount = 1.#30.
+time_amount = 30.
 
-scenario_name = "restaurant"#"bus"#"choir_practice"#"implicit_crowds_8_agents"#"2_agents"#
+scenario_name = "choir_practice"#"bus"#"restaurant"#"implicit_crowds_8_agents"#"2_agents"#
 
 ttc_smoothing_eps = 0.2
 ttc_constant = 1.5
@@ -24,7 +24,7 @@ ttc_0 = 3
 
 maximum_disease = 1.
 #disease_person_to_air_coefficient = 1.
-disease_air_to_person_coefficient = 1.
+disease_air_to_person_coefficient = 0.2
 
 MAC_cell_width = 0.1  # each MAC cell is 0.1 meters on each side
 density_threshold = 0.003
@@ -306,6 +306,13 @@ def spread_infection_to_air(agents, grid):
             grid.distribute_value(agent.position, "disease_concentration", maximum_disease)
             grid.fixed_airflow_data[i] = (agent.position, 1.5*agent.velocity) #TODO expelled air velocity needs a minimum value and known agent direction for cases of motionless infectious people.
 
+def set_fixed_airflow(airflow_list, grid, pop_num):
+    width_to_use = grid.MAC_cell_width / 2.
+    for left,right,bottom,top,vel_x,vel_y in airflow_list:
+        for i in np.arange(left,right,width_to_use):
+            for j in np.arange(bottom,top,width_to_use):
+                grid.fixed_airflow_data[i*j + pop_num + 10] = (np.array([i,j]), np.array([vel_x, vel_y]))
+
 
 def obstacle_signed_distance_and_gradient(obstacle, point):
     # inside obstacle, distance value does not matter, but distance sign does matter
@@ -370,15 +377,22 @@ def open_scenario(folder,scenario_name):
         is_infectious = data[i][9]
         agents.append(Person(position, velocity, destination, desired_speed, disease, immunity, is_infectious))
 
+    #get obstacles data
+    obstacles_data = None
     obstacles_file_path = os.path.join(folder, scenario_name + "_obstacles.csv")
     if os.path.isfile(obstacles_file_path):
         obstacles_data = file_handling.read_numerical_csv_file(obstacles_file_path)
         #for i in np.arange(obstacles_data.shape[0]):
         #    row = obstacles_data[i]
         #    obstacles.append([np.array([row[0], row[2]]), np.array([row[0], row[3]]), np.array(row[1], row[2]), np.array(row[1], row[3])])
-        return agents, obstacles_data
 
-    return agents, None
+    #get fixed airflow data
+    fixed_airflow_sources_data = None
+    fixed_airflow_sources_file_path = os.path.join(folder, scenario_name + "_air_sources.csv")
+    if os.path.isfile(fixed_airflow_sources_file_path):
+        fixed_airflow_sources_data = file_handling.read_numerical_csv_file(fixed_airflow_sources_file_path)
+
+    return agents, obstacles_data, fixed_airflow_sources_data
 
 def get_world_dimensions_from_walls(obstacles):
     min_x = max_x = min_y = max_y = 0.0
@@ -406,7 +420,7 @@ if not os.path.isdir((scenario_output_folder)):
     os.mkdir(scenario_output_folder)
 
 #open the scenario
-agents, obstacles = open_scenario("scenarios",scenario_name)
+agents, obstacles, airflow_sources = open_scenario("scenarios",scenario_name)
 pop_num = len(agents)
 number_of_time_steps = int(np.ceil(time_amount / dt))
 
@@ -414,7 +428,9 @@ world_x_length = 18
 world_y_length = 18
 if obstacles is not None:
     world_x_length, world_y_length = get_world_dimensions_from_walls(obstacles)
+print("world_x_length, world_y_length",world_x_length, world_y_length)
 grid_shape = (int(np.ceil(world_x_length/MAC_cell_width)),int(np.ceil(world_y_length/MAC_cell_width)))
+print(grid_shape)
 
 #set up data output
 crowd_data_dir = os.path.join(scenario_output_folder, "crowd_data")
@@ -436,6 +452,10 @@ for cell_list in air_and_disease_grid.cell_table.values():
             if sd <= 0.:
                 cell.type=2
 
+#set up fixed airflow sources for the air and disease grid
+if airflow_sources is not None:
+    set_fixed_airflow(airflow_sources, air_and_disease_grid, pop_num)
+
 #main loop
 for i in np.arange(number_of_time_steps):
     print("Step:",i,"out of",number_of_time_steps)
@@ -449,8 +469,7 @@ for i in np.arange(number_of_time_steps):
     #infect people
     infect_people(agents, air_and_disease_grid)
 
-    #TODO: restore airflow solve
-    '''#update airflow velocities
+    #update airflow velocities
     air_and_disease_grid.backwards_velocity_trace(dt)
     air_and_disease_grid.set_airflow_in_cells() #this applies forces to the airflow from talking, singing, coughing, sneezing, breezes, and HVAC
     air_and_disease_grid.enforce_velocity_boundary_conditions()
@@ -459,7 +478,7 @@ for i in np.arange(number_of_time_steps):
     air_and_disease_grid.apply_pressures(assignment_list, dt)
     air_and_disease_grid.velocity_divergence_check("after pressure", dt)#TODO: delete this
     air_and_disease_grid.enforce_velocity_boundary_conditions()
-    air_and_disease_grid.velocity_divergence_check("after second enforcement", dt)#TODO: delete this'''
+    air_and_disease_grid.velocity_divergence_check("after second enforcement", dt)#TODO: delete this
 
     #update disease concentration
     air_and_disease_grid.advect_disease_densities(dt)

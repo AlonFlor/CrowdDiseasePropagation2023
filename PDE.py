@@ -50,15 +50,15 @@ class grid:
         self.disease_diffusivity_constant = disease_diffusivity_constant
         self.disease_die_off_rate = disease_die_off_rate
 
-        self.min_i = -grid_shape[0] / 2
-        self.max_i = grid_shape[0] / 2 - 1
-        self.min_j = -grid_shape[1] / 2
-        self.max_j = grid_shape[1] / 2 - 1
+        self.min_i = np.floor(-grid_shape[0] / 2)-1
+        self.max_i = np.ceil(grid_shape[0] / 2 - 1)+1
+        self.min_j = np.floor(-grid_shape[1] / 2)-1
+        self.max_j = np.ceil(grid_shape[1] / 2 - 1)+1
 
         self.cell_table = dict()
         size_side1, size_side2 = grid_shape
-        half_way1 = size_side1/2
-        half_way2 = size_side2/2
+        half_way1 = int(size_side1/2)
+        half_way2 = int(size_side2/2)
         for i_raw in np.arange(size_side1):
             i = i_raw-half_way1
             for j_raw in np.arange(size_side2):
